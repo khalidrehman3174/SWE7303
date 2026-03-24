@@ -6,8 +6,7 @@
         <nav class="sidebar-menu">
             <a href="index.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'dashboard') ? 'active' : ''; ?>"><i class="fas fa-layer-group"></i> Dashboard</a>
             <a href="payments.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'payments') ? 'active' : ''; ?>"><i class="fas fa-paper-plane"></i> Payments</a>
-            <a href="#" class="nav-link-pro"><i class="fas fa-wallet"></i> Assets</a>
-            <a href="#" class="nav-link-pro"><i class="fas fa-exchange-alt"></i> Swap</a>
+            <a href="assets.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'assets') ? 'active' : ''; ?>"><i class="fas fa-wallet"></i> Assets</a>
             <a href="cards.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'cards') ? 'active' : ''; ?>"><i class="fas fa-credit-card"></i> Cards</a>
             <a href="#" class="nav-link-pro"><i class="fas fa-shield-alt"></i> Security</a>
         </nav>

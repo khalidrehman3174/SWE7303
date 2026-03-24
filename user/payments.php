@@ -29,15 +29,9 @@ require_once 'templates/head.php';
 
                 <!-- Premium Master Search Bar -->
                 <div class="glass-panel mx-3 mx-lg-0 mb-4 mb-lg-5 d-flex align-items-center" style="padding: 8px 8px 8px 20px; border-radius: 100px;">
-                    <i class="fas fa-search" style="color: var(--text-secondary); font-size: 1.2rem;"></i>
-                    <input type="text" placeholder="Search people, tags, or banks..." style="flex: 1; background: transparent; border: none; color: var(--text-primary); font-family: 'Outfit', sans-serif; font-size: 1.05rem; outline: none; padding-left: 15px;">
-                    <button class="btn-pro btn-pro-primary d-none d-md-flex align-items-center gap-2" data-bs-toggle="modal" data-bs-target="#newPaymentModal" style="flex: 0 0 auto; padding: 12px 24px; border-radius: 100px; font-size: 0.95rem;"><i class="fas fa-plus"></i> New</button>
-                </div>
-                
-                <!-- Mobile Action Buttons -->
-                <div class="d-flex px-3 mb-5 d-lg-none gap-3">
-                    <button class="btn-pro btn-pro-primary" style="border-radius: 100px;" data-bs-toggle="modal" data-bs-target="#newPaymentModal"><i class="fas fa-arrow-up"></i> Send</button>
-                    <button class="btn-pro btn-pro-secondary" style="border-radius: 100px;"><i class="fas fa-arrow-down text-info"></i> Request</button>
+                    <i class="fas fa-search" style="color: var(--text-secondary); font-size: 1.1rem;"></i>
+                    <input type="text" placeholder="Search payments..." style="flex: 1; min-width: 0; background: transparent; border: none; color: var(--text-primary); font-family: 'Outfit', sans-serif; font-size: 1rem; outline: none; padding-left: 12px; padding-right: 12px;">
+                    <button class="btn-pro btn-pro-primary d-flex align-items-center gap-2" data-bs-toggle="modal" data-bs-target="#newPaymentModal" style="flex: 0 0 auto; padding: 10px 24px; border-radius: 100px; font-size: 0.95rem;"><i class="fas fa-plus"></i> New</button>
                 </div>
 
                 <div class="d-flex justify-content-between align-items-center mb-3 px-3 px-lg-0">

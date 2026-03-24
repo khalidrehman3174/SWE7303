@@ -7,13 +7,9 @@
             <i class="fas fa-paper-plane"></i>
             <span>Pay</span>
         </a>
-        <a href="#" class="bottom-nav-item">
+        <a href="assets.php" class="bottom-nav-item <?php echo (isset($activePage) && $activePage == 'assets') ? 'active' : ''; ?>">
             <i class="fas fa-wallet"></i>
             <span>Assets</span>
-        </a>
-        <a href="#" class="bottom-nav-item">
-            <i class="fas fa-exchange-alt"></i>
-            <span>Swap</span>
         </a>
         <a href="#" class="bottom-nav-item">
             <i class="fas fa-bell"></i>
