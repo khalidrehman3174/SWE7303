@@ -19,7 +19,9 @@ function deposit_service_create(mysqli $dbc, int $userId, string $method, float 
     }
 
     $depositId = 'dep_' . bin2hex(random_bytes(12));
-    $status = in_array($method, ['card', 'bank'], true) ? 'pending_provider' : 'completed';
+    // Apple deposits are settled immediately in sandbox, but must not start as completed
+    // or settlement short-circuits before wallet credit is applied.
+    $status = in_array($method, ['card', 'bank'], true) ? 'pending_provider' : 'initiated';
 
     $row = [
         'deposit_id' => $depositId,
