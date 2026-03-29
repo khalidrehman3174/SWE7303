@@ -46,7 +46,6 @@ require_once 'templates/head.php';
                 <!-- Filter Pills -->
                 <div class="d-flex px-3 px-lg-0 mb-4" style="gap: 10px; overflow-x: auto; -ms-overflow-style: none; scrollbar-width: none; padding-bottom: 5px;">
                     <div style="padding: 10px 24px; background: var(--text-primary); color: var(--bg-body); border-radius: 100px; font-weight: 600; font-size: 0.9rem; white-space: nowrap; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">All Assets</div>
-                    <div style="padding: 10px 24px; background: var(--list-bg); border: 1px solid var(--border-light); border-radius: 100px; font-weight: 600; font-size: 0.9rem; white-space: nowrap; cursor: pointer; color: var(--text-secondary);">Fiat</div>
                     <div style="padding: 10px 24px; background: var(--list-bg); border: 1px solid var(--border-light); border-radius: 100px; font-weight: 600; font-size: 0.9rem; white-space: nowrap; cursor: pointer; color: var(--text-secondary);">Crypto</div>
                 </div>
 
@@ -57,20 +56,8 @@ require_once 'templates/head.php';
                 <!-- Asset List -->
                 <div class="glass-panel mx-3 mx-lg-0 mb-5" style="border-radius: 24px; padding: 1rem 1.5rem;">
                     
-                    <!-- Fiat -->
-                    <div class="asset-row px-0" style="border-radius: 0; padding-top: 0.5rem !important; padding-bottom: 1.5rem !important; border-bottom: 1px solid var(--border-light);">
-                        <div class="asset-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; width: 50px; height: 50px; font-size: 1.4rem; border-radius: 16px;"><i class="fas fa-pound-sign"></i></div>
-                        <div class="asset-info ml-3">
-                            <div class="asset-name" style="font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">British Pound <span style="font-size: 0.7rem; background: var(--hover-bg); padding: 4px 8px; border-radius: 6px; color: var(--text-secondary); border: 1px solid var(--border-light);">GBP</span></div>
-                            <div class="asset-sub">Primary Account</div>
-                        </div>
-                        <div class="asset-value text-end">
-                            <div class="asset-price" style="font-size: 1.15rem;">£4,209.50</div>
-                        </div>
-                    </div>
-
                     <!-- Crypto -->
-                    <div class="asset-row px-0" style="border-radius: 0; padding: 1.5rem 0 !important; border-bottom: 1px solid var(--border-light);">
+                    <div class="asset-row px-0" role="button" tabindex="0" onclick="window.location.href='asset_details.php?asset=BTC'" onkeypress="if(event.key==='Enter'){window.location.href='asset_details.php?asset=BTC';}" style="border-radius: 0; padding-top: 0.5rem !important; padding-bottom: 1.5rem !important; border-bottom: 1px solid var(--border-light);">
                         <div class="asset-icon" style="background: rgba(245, 158, 11, 0.1); color: #f59e0b; width: 50px; height: 50px; font-size: 1.4rem; border-radius: 16px;"><i class="fab fa-bitcoin"></i></div>
                         <div class="asset-info ml-3">
                             <div class="asset-name" style="font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">Bitcoin <span style="font-size: 0.7rem; background: var(--hover-bg); padding: 4px 8px; border-radius: 6px; color: var(--text-secondary); border: 1px solid var(--border-light);">BTC</span></div>
@@ -83,7 +70,7 @@ require_once 'templates/head.php';
                     </div>
                     
                     <!-- Ethereum -->
-                    <div class="asset-row px-0" style="border-radius: 0; padding-top: 1.5rem !important; padding-bottom: 0.5rem !important; border: none;">
+                    <div class="asset-row px-0" role="button" tabindex="0" onclick="window.location.href='asset_details.php?asset=ETH'" onkeypress="if(event.key==='Enter'){window.location.href='asset_details.php?asset=ETH';}" style="border-radius: 0; padding-top: 1.5rem !important; padding-bottom: 0.5rem !important; border: none;">
                         <div class="asset-icon" style="background: rgba(99, 102, 241, 0.1); color: #6366f1; width: 50px; height: 50px; font-size: 1.4rem; border-radius: 16px;"><i class="fab fa-ethereum"></i></div>
                         <div class="asset-info ml-3">
                             <div class="asset-name" style="font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">Ethereum <span style="font-size: 0.7rem; background: var(--hover-bg); padding: 4px 8px; border-radius: 6px; color: var(--text-secondary); border: 1px solid var(--border-light);">ETH</span></div>
@@ -109,7 +96,7 @@ require_once 'templates/head.php';
 
                 <div class="glass-panel" style="padding: 1.5rem; border-radius: 24px; margin-bottom: 3rem;">
                     
-                    <div class="asset-row px-0 pt-0" style="padding-bottom: 1.25rem; border-bottom: 1px solid var(--border-light); border-radius: 0;">
+                    <div class="asset-row px-0 pt-0" role="button" tabindex="0" onclick="window.location.href='asset_details.php?asset=SOL'" onkeypress="if(event.key==='Enter'){window.location.href='asset_details.php?asset=SOL';}" style="padding-bottom: 1.25rem; border-bottom: 1px solid var(--border-light); border-radius: 0;">
                         <div class="asset-icon" style="background: rgba(16, 185, 129, 0.1); color: #10b981; width: 44px; height: 44px; font-size: 1.2rem; border-radius: 12px;"><i class="fas fa-bolt"></i></div>
                         <div class="asset-info ml-3">
                             <div class="asset-name" style="font-size: 1rem;">Solana <span style="font-size: 0.65rem; background: var(--hover-bg); padding: 3px 6px; border-radius: 4px; color: var(--text-secondary); border: 1px solid var(--border-light); margin-left: 5px;">SOL</span></div>
@@ -120,7 +107,7 @@ require_once 'templates/head.php';
                         </div>
                     </div>
 
-                    <div class="asset-row px-0 border-0 pb-0" style="padding-top: 1.25rem; border-radius: 0;">
+                    <div class="asset-row px-0 border-0 pb-0" role="button" tabindex="0" onclick="window.location.href='asset_details.php?asset=BNB'" onkeypress="if(event.key==='Enter'){window.location.href='asset_details.php?asset=BNB';}" style="padding-top: 1.25rem; border-radius: 0;">
                         <div class="asset-icon" style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 44px; height: 44px; font-size: 1.2rem; border-radius: 12px;"><i class="fas fa-cube"></i></div>
                         <div class="asset-info ml-3">
                             <div class="asset-name" style="font-size: 1rem;">Binance Coin <span style="font-size: 0.65rem; background: var(--hover-bg); padding: 3px 6px; border-radius: 4px; color: var(--text-secondary); border: 1px solid var(--border-light); margin-left: 5px;">BNB</span></div>

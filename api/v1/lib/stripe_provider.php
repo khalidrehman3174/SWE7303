@@ -12,6 +12,14 @@ function stripe_provider_create_payment_intent(array $config, string $depositId,
         ];
     }
 
+    if (!class_exists('\\Stripe\\Stripe')) {
+        return [
+            'ok' => false,
+            'error_code' => 'stripe_sdk_missing',
+            'error' => 'Stripe SDK is not installed. Run composer install.',
+        ];
+    }
+
     try {
         \Stripe\Stripe::setApiKey($config['stripe_secret_key']);
 
@@ -35,6 +43,7 @@ function stripe_provider_create_payment_intent(array $config, string $depositId,
     } catch (Throwable $e) {
         return [
             'ok' => false,
+            'error_code' => 'stripe_exception',
             'error' => $e->getMessage(),
         ];
     }

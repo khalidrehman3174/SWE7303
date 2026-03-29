@@ -1,7 +1,12 @@
 // assets.js - Professional Asset Render with Live Data
 (() => {
+    const hiddenBaseSymbols = new Set(['GBP', 'USD', 'EUR', 'NGN']);
+
     // Use Server-injected assets or fallback to empty
-    const assets = window.userAssets || [];
+    const assets = (window.userAssets || []).filter(a => {
+        const sym = ((a && a.symbol) ? String(a.symbol) : '').toUpperCase();
+        return sym !== '' && !hiddenBaseSymbols.has(sym);
+    });
 
     // Map legacy color/icon if missing from PHP (optional enhancement)
     assets.forEach(a => {

@@ -1,20 +1,20 @@
 <?php return array(
     'root' => array(
-        'name' => '__root__',
-        'pretty_version' => 'dev-dev',
-        'version' => 'dev-dev',
-        'reference' => '8870bbb651c2dd1b593cee5e1860b8a6aeb8b62f',
-        'type' => 'library',
+        'name' => 'finpay/application',
+        'pretty_version' => 'dev-main',
+        'version' => 'dev-main',
+        'reference' => '84c156c0773bf00184df11a43940f4af6536f280',
+        'type' => 'project',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
         'dev' => true,
     ),
     'versions' => array(
-        '__root__' => array(
-            'pretty_version' => 'dev-dev',
-            'version' => 'dev-dev',
-            'reference' => '8870bbb651c2dd1b593cee5e1860b8a6aeb8b62f',
-            'type' => 'library',
+        'finpay/application' => array(
+            'pretty_version' => 'dev-main',
+            'version' => 'dev-main',
+            'reference' => '84c156c0773bf00184df11a43940f4af6536f280',
+            'type' => 'project',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
             'dev_requirement' => false,
@@ -252,6 +252,15 @@
             'install_path' => __DIR__ . '/../staabm/side-effects-detector',
             'aliases' => array(),
             'dev_requirement' => true,
+        ),
+        'stripe/stripe-php' => array(
+            'pretty_version' => 'v16.0.0',
+            'version' => '16.0.0.0',
+            'reference' => '7a0b0283d492b66474ef9aa45a7acc938662b580',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../stripe/stripe-php',
+            'aliases' => array(),
+            'dev_requirement' => false,
         ),
         'theseer/tokenizer' => array(
             'pretty_version' => '1.3.1',

@@ -194,5 +194,19 @@ if(!isset($pageTitle)) $pageTitle = 'FinPay Pro';
 
         .section-heading { font-weight: 700; font-size: 1.2rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; }
     </style>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            if (!window.bootstrap || !window.bootstrap.Offcanvas) {
+                return;
+            }
+
+            document.querySelectorAll('.offcanvas.offcanvas-end').forEach(function (node) {
+                window.bootstrap.Offcanvas.getOrCreateInstance(node, {
+                    backdrop: 'static',
+                    keyboard: false,
+                });
+            });
+        });
+    </script>
 </head>
 <body>

@@ -51,7 +51,16 @@ function deposit_service_create(mysqli $dbc, int $userId, string $method, float 
         $providerResult = stripe_provider_create_payment_intent($config, $depositId, $userId, $amount);
         if (!$providerResult['ok']) {
             deposit_repo_update_status($dbc, $depositId, 'failed');
-            return ['ok' => false, 'code' => 'provider_error', 'message' => 'Card provider init failed'];
+            $providerError = trim((string)($providerResult['error'] ?? ''));
+            $providerCode = trim((string)($providerResult['error_code'] ?? 'provider_error'));
+            error_log('Deposit card provider init failed [' . $providerCode . '] for ' . $depositId . ': ' . $providerError);
+
+            $message = 'Card provider init failed';
+            if (($config['app_env'] ?? 'development') !== 'production' && $providerError !== '') {
+                $message .= ': ' . $providerError;
+            }
+
+            return ['ok' => false, 'code' => 'provider_error', 'message' => $message];
         }
 
         if (!empty($providerResult['external_reference'])) {

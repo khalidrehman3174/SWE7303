@@ -1,10 +1,10 @@
 // asset_details.js
-// Dynamic Asset Data Fetcher using Binance API
+// Dynamic asset details data hydrator using CryptoCompare
 
 (() => {
     const symbol = new URLSearchParams(window.location.search).get('asset') || 'BTC';
 
-    // Metadata that isn't available from public ticker APIs
+    // Metadata that is not reliably available from ticker APIs.
     const coinMeta = {
         'BTC': { name: 'Bitcoin', color: '#F7931A', desc: 'The first decentralized cryptocurrency.' },
         'ETH': { name: 'Ethereum', color: '#627EEA', desc: 'A decentralized platform for smart contracts.' },
@@ -27,16 +27,29 @@
         return '$' + (v / 1e3).toFixed(2) + 'K';
     };
 
+    const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    };
+
     async function fetchData() {
         try {
-            // Fetch Ticker Data
+            // Fetch ticker data
             let price = 1.00;
             let percentChange = 0.00;
             let vol = 0;
             let high = 0;
             let low = 0;
+            let marketCap = 0;
 
-            if (symbol !== 'USDT') {
+            if (symbol === 'GBP') {
+                price = 1.27;
+                percentChange = 0.08;
+                vol = 1800000000;
+                high = 1.28;
+                low = 1.26;
+                marketCap = 0;
+            } else if (symbol !== 'USDT' && symbol !== 'USDC') {
                 const res = await fetch(`https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${symbol}&tsyms=USD`);
                 if (res.ok) {
                     const data = await res.json();
@@ -48,46 +61,56 @@
                         vol = parseFloat(ticker.VOLUME24HOURTO); // Volume in USD
                         high = parseFloat(ticker.HIGH24HOUR);
                         low = parseFloat(ticker.LOW24HOUR);
+                        marketCap = parseFloat(ticker.MKTCAP || 0);
                     }
                 }
             } else {
-                // USDT logic - basically static
-                vol = 50000000000; // Mock high vol
+                // Stablecoin assumptions
+                price = 1.00;
+                percentChange = 0.00;
+                vol = 50000000000;
+                high = 1.001;
+                low = 0.999;
+                marketCap = 0;
             }
 
-            // Update DOM
-            updateUI(price, percentChange, vol);
+            updateUI(price, percentChange, vol, high, low, marketCap);
 
         } catch (e) {
             console.error("Fetch failed", e);
         }
     }
 
-    function updateUI(price, change, vol) {
+    function updateUI(price, change, vol, high, low, marketCap) {
         // Balances
         const balEl = document.getElementById('crypto-balance');
-        const amount = parseFloat(balEl.getAttribute('data-amount') || 0);
+        const amount = parseFloat((balEl && balEl.getAttribute('data-amount')) || 0);
         const fiatVal = amount * price;
 
-        document.getElementById('fiat-balance').textContent = fmtUSD(fiatVal);
+        setText('fiat-balance', fmtUSD(fiatVal));
+        setText('market-price', fmtUSD(price));
 
         // Market Stats
-        const volEl = document.getElementById('trading-volume');
-        if (volEl) volEl.textContent = fmtVol(vol);
+        setText('trading-volume', fmtVol(vol));
+        setText('day-range', `${fmtUSD(low)} - ${fmtUSD(high)}`);
 
-        // Color update if change > 0
-        const changeClass = change >= 0 ? 'text-green' : 'text-danger';
-        // We could add a % change indicator somewhere if the UI had a slot for it.
-        // The current asset_details.php doesn't have a dedicated slot for %, 
-        // but we filled the "Volume" slot which was requested.
+        const dailyChangeEl = document.getElementById('daily-change');
+        if (dailyChangeEl) {
+            const positive = change >= 0;
+            dailyChangeEl.textContent = `${positive ? '+' : ''}${change.toFixed(2)}% (24h)`;
+            dailyChangeEl.style.color = positive ? '#10b981' : '#ef4444';
+        }
 
-        // Update Metadata if generic
-        document.getElementById('coin-name').textContent = meta.name;
-        document.getElementById('coin-symbol').textContent = symbol;
+        const marketCapEl = document.getElementById('market-cap');
+        if (marketCapEl) {
+            marketCapEl.textContent = marketCap > 0 ? fmtVol(marketCap) : 'N/A';
+        }
+
+        // Update metadata if generic
+        setText('coin-name', meta.name);
+        setText('coin-symbol', symbol);
         const descEl = document.getElementById('about-desc');
         if (descEl) descEl.textContent = meta.desc;
-
-        // Icon Error Fallback logic (already in PHP, but can reinforce here)
     }
 
     // Init
