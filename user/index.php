@@ -216,121 +216,17 @@ if (!empty($allActivities)) {
     }
 }
 
-function dashboard_table_exists(mysqli $dbc, string $table): bool
-{
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
-    if ($safeTable === '') {
-        return false;
-    }
+require_once __DIR__ . '/../includes/available_balance.php';
 
-    $result = mysqli_query($dbc, "SHOW TABLES LIKE '{$safeTable}'");
-    return $result && mysqli_num_rows($result) > 0;
-}
-
-function dashboard_table_columns(mysqli $dbc, string $table): array
-{
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
-    if ($safeTable === '') {
-        return [];
-    }
-
-    $columns = [];
-    $result = mysqli_query($dbc, "SHOW COLUMNS FROM {$safeTable}");
-    if ($result) {
-        while ($row = mysqli_fetch_assoc($result)) {
-            $columns[] = (string)($row['Field'] ?? '');
-        }
-    }
-
-    return $columns;
-}
-
-function dashboard_first_existing_column(array $columns, array $candidates): ?string
-{
-    foreach ($candidates as $candidate) {
-        if (in_array($candidate, $columns, true)) {
-            return $candidate;
-        }
-    }
-
-    return null;
-}
-
-function dashboard_sum_completed_gbp_for_table(mysqli $dbc, int $userId, string $table, array $columnMap): float
-{
-    if (!dashboard_table_exists($dbc, $table)) {
-        return 0.0;
-    }
-
-    $columns = dashboard_table_columns($dbc, $table);
-    if (empty($columns)) {
-        return 0.0;
-    }
-
-    $userCol = dashboard_first_existing_column($columns, $columnMap['user']);
-    $statusCol = dashboard_first_existing_column($columns, $columnMap['status']);
-    $currencyCol = dashboard_first_existing_column($columns, $columnMap['currency']);
-    $amountCol = dashboard_first_existing_column($columns, $columnMap['amount']);
-
-    if ($userCol === null || $statusCol === null || $currencyCol === null || $amountCol === null) {
-        return 0.0;
-    }
-
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
-    $sql = "SELECT COALESCE(SUM({$amountCol}), 0) AS total
-            FROM {$safeTable}
-            WHERE {$userCol} = ?
-              AND LOWER({$statusCol}) = 'completed'
-              AND UPPER({$currencyCol}) = 'GBP'";
-
-    $stmt = mysqli_prepare($dbc, $sql);
-    if (!$stmt) {
-        return 0.0;
-    }
-
-    mysqli_stmt_bind_param($stmt, 'i', $userId);
-    mysqli_stmt_execute($stmt);
-    $result = mysqli_stmt_get_result($stmt);
-    $row = $result ? mysqli_fetch_assoc($result) : null;
-    mysqli_stmt_close($stmt);
-
-    return (float)($row['total'] ?? 0);
-}
-
-$fiatAreaBalance = 0.0;
+$fiatBalancePayload = finpay_balance_format_payload(0.0, 'none');
 if (isset($dbc, $_SESSION['user_id'])) {
-    $safeUserId = (int)$_SESSION['user_id'];
-
-    $completedGbpDeposits = dashboard_sum_completed_gbp_for_table($dbc, $safeUserId, 'deposits', [
-        'user' => ['user_id'],
-        'status' => ['status'],
-        'currency' => ['currency'],
-        'amount' => ['net_amount', 'amount'],
-    ]);
-
-    $completedGbpWithdrawals = 0.0;
-    $withdrawalTables = ['withdrawals', 'fiat_withdrawals', 'withdrawal_requests'];
-    foreach ($withdrawalTables as $withdrawalTable) {
-        $tableTotal = dashboard_sum_completed_gbp_for_table($dbc, $safeUserId, $withdrawalTable, [
-            'user' => ['user_id'],
-            'status' => ['status', 'state'],
-            'currency' => ['currency', 'fiat_currency', 'asset'],
-            'amount' => ['net_amount', 'amount', 'withdrawal_amount'],
-        ]);
-
-        if ($tableTotal > 0) {
-            $completedGbpWithdrawals += $tableTotal;
-        }
-    }
-
-    $fiatAreaBalance = $completedGbpDeposits - $completedGbpWithdrawals;
+    $fiatBalancePayload = finpay_get_available_balance_gbp($dbc, (int)$_SESSION['user_id']);
 }
 
-$fiatBalanceAbsFormatted = number_format(abs($fiatAreaBalance), 2, '.', ',');
-$fiatBalanceParts = explode('.', $fiatBalanceAbsFormatted);
-$fiatBalanceMajor = $fiatBalanceParts[0] ?? '0';
-$fiatBalanceMinor = $fiatBalanceParts[1] ?? '00';
-$fiatBalanceSign = $fiatAreaBalance < 0 ? '-' : '';
+$fiatAreaBalance = (float)($fiatBalancePayload['amount'] ?? 0.0);
+$fiatBalanceSign = (string)($fiatBalancePayload['sign'] ?? '');
+$fiatBalanceMajor = (string)($fiatBalancePayload['major'] ?? '0');
+$fiatBalanceMinor = (string)($fiatBalancePayload['minor'] ?? '00');
 
 require_once 'templates/head.php';
 ?>

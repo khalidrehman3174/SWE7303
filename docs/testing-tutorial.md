@@ -39,6 +39,20 @@ Run only the example test:
 php vendor/bin/phpunit tests/ExampleTest.php --colors=always
 ```
 
+Run only the payment process suite:
+
+```bash
+php vendor/bin/phpunit tests/PaymentApiTest.php --colors=always
+```
+
+The payment suite validates:
+
+- Creating a payment contact and sending a payment.
+- GBP wallet balance deduction after successful send.
+- Transaction and withdrawal persistence for payment sends.
+- Insufficient balance protection (no debit and no inserts).
+- Invalid amount validation.
+
 ## 4. Run one specific test method
 
 Use `--filter` with a method name:
@@ -96,3 +110,49 @@ If PHPUnit command is not found:
 ## 8. Latest deposit suite report
 
 For a full execution report of the deposit suite (command, runtime, assertion totals, and case-by-case coverage), see `docs/deposit-test-report.md`.
+
+## 9. CI / Pipeline Commands
+
+Use these commands in automated pipelines depending on the runner OS.
+
+Windows runner:
+
+```bash
+composer install --no-interaction --prefer-dist
+vendor\bin\phpunit.bat --testdox
+```
+
+Linux/macOS runner:
+
+```bash
+composer install --no-interaction --prefer-dist
+./vendor/bin/phpunit --testdox
+```
+
+Run only payment tests in CI:
+
+Windows:
+
+```bash
+vendor\bin\phpunit.bat tests\PaymentApiTest.php --testdox
+```
+
+Linux/macOS:
+
+```bash
+./vendor/bin/phpunit tests/PaymentApiTest.php --testdox
+```
+
+Optional JUnit XML output (for CI test reports):
+
+Windows:
+
+```bash
+vendor\bin\phpunit.bat --log-junit build\phpunit-report.xml
+```
+
+Linux/macOS:
+
+```bash
+./vendor/bin/phpunit --log-junit build/phpunit-report.xml
+```

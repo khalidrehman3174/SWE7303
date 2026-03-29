@@ -3,6 +3,7 @@ $pageTitle = 'FinPay Pro - Asset Details';
 $activePage = 'assets';
 require_once 'templates/head.php';
 require_once __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/available_balance.php';
 
 $asset = isset($_GET['asset']) ? strtoupper(trim((string)$_GET['asset'])) : 'BTC';
 $asset = preg_replace('/[^A-Z0-9]/', '', $asset);
@@ -30,15 +31,20 @@ $meta = $assetMeta[$asset] ?? [
 
 $userId = (int)$_SESSION['user_id'];
 $amount = 0.0;
-$stmt = mysqli_prepare($dbc, 'SELECT balance FROM wallets WHERE user_id = ? AND symbol = ? LIMIT 1');
-if ($stmt) {
-    mysqli_stmt_bind_param($stmt, 'is', $userId, $asset);
-    mysqli_stmt_execute($stmt);
-    $result = mysqli_stmt_get_result($stmt);
-    $row = $result ? mysqli_fetch_assoc($result) : null;
-    mysqli_stmt_close($stmt);
-    if ($row && isset($row['balance'])) {
-        $amount = (float)$row['balance'];
+if ($asset === 'GBP') {
+    $balancePayload = finpay_get_available_balance_gbp($dbc, $userId);
+    $amount = (float)($balancePayload['amount'] ?? 0.0);
+} else {
+    $stmt = mysqli_prepare($dbc, 'SELECT balance FROM wallets WHERE user_id = ? AND symbol = ? LIMIT 1');
+    if ($stmt) {
+        mysqli_stmt_bind_param($stmt, 'is', $userId, $asset);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $row = $result ? mysqli_fetch_assoc($result) : null;
+        mysqli_stmt_close($stmt);
+        if ($row && isset($row['balance'])) {
+            $amount = (float)$row['balance'];
+        }
     }
 }
 

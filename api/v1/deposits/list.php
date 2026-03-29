@@ -1,12 +1,14 @@
 <?php
 
 require_once __DIR__ . '/../lib/bootstrap.php';
+require_once __DIR__ . '/../../../includes/available_balance.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     api_bad_request('Only GET is supported', 'invalid_method');
 }
 
 $userId = api_get_authenticated_user_id();
+$balancePayload = finpay_get_available_balance_gbp($dbc, $userId);
 $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 200;
 if ($limit < 1) {
     $limit = 1;
@@ -20,6 +22,15 @@ if (!$tableExistsResult || mysqli_num_rows($tableExistsResult) === 0) {
     api_json_response(200, true, 'deposit_activity_list', 'No deposit activity yet', [
         'all' => [],
         'recent' => [],
+        'balance' => [
+            'amount' => (float)($balancePayload['amount'] ?? 0.0),
+            'sign' => (string)($balancePayload['sign'] ?? ''),
+            'major' => (string)($balancePayload['major'] ?? '0'),
+            'minor' => (string)($balancePayload['minor'] ?? '00'),
+            'formatted' => (string)($balancePayload['formatted'] ?? '0.00'),
+            'currency' => (string)($balancePayload['currency'] ?? 'GBP'),
+            'source' => (string)($balancePayload['source'] ?? 'none'),
+        ],
     ]);
 }
 
@@ -144,87 +155,6 @@ function list_activity_meta(string $method, string $status): array
     return $meta;
 }
 
-function list_table_exists(mysqli $dbc, string $table): bool
-{
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
-    if ($safeTable === '') {
-        return false;
-    }
-
-    $result = mysqli_query($dbc, "SHOW TABLES LIKE '{$safeTable}'");
-    return $result && mysqli_num_rows($result) > 0;
-}
-
-function list_table_columns(mysqli $dbc, string $table): array
-{
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
-    if ($safeTable === '') {
-        return [];
-    }
-
-    $columns = [];
-    $result = mysqli_query($dbc, "SHOW COLUMNS FROM {$safeTable}");
-    if ($result) {
-        while ($row = mysqli_fetch_assoc($result)) {
-            $columns[] = (string)($row['Field'] ?? '');
-        }
-    }
-
-    return $columns;
-}
-
-function list_first_existing_column(array $columns, array $candidates): ?string
-{
-    foreach ($candidates as $candidate) {
-        if (in_array($candidate, $columns, true)) {
-            return $candidate;
-        }
-    }
-
-    return null;
-}
-
-function list_sum_completed_gbp_for_table(mysqli $dbc, int $userId, string $table, array $columnMap): float
-{
-    if (!list_table_exists($dbc, $table)) {
-        return 0.0;
-    }
-
-    $columns = list_table_columns($dbc, $table);
-    if (empty($columns)) {
-        return 0.0;
-    }
-
-    $userCol = list_first_existing_column($columns, $columnMap['user']);
-    $statusCol = list_first_existing_column($columns, $columnMap['status']);
-    $currencyCol = list_first_existing_column($columns, $columnMap['currency']);
-    $amountCol = list_first_existing_column($columns, $columnMap['amount']);
-
-    if ($userCol === null || $statusCol === null || $currencyCol === null || $amountCol === null) {
-        return 0.0;
-    }
-
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
-    $sql = "SELECT COALESCE(SUM({$amountCol}), 0) AS total
-            FROM {$safeTable}
-            WHERE {$userCol} = ?
-              AND LOWER({$statusCol}) = 'completed'
-              AND UPPER({$currencyCol}) = 'GBP'";
-
-    $stmt = mysqli_prepare($dbc, $sql);
-    if (!$stmt) {
-        return 0.0;
-    }
-
-    mysqli_stmt_bind_param($stmt, 'i', $userId);
-    mysqli_stmt_execute($stmt);
-    $result = mysqli_stmt_get_result($stmt);
-    $row = $result ? mysqli_fetch_assoc($result) : null;
-    mysqli_stmt_close($stmt);
-
-    return (float)($row['total'] ?? 0);
-}
-
 $payload = [];
 foreach ($activities as $activity) {
     $meta = list_activity_meta((string)($activity['method'] ?? ''), (string)($activity['status'] ?? ''));
@@ -244,43 +174,16 @@ foreach ($activities as $activity) {
     ];
 }
 
-$completedGbpDeposits = list_sum_completed_gbp_for_table($dbc, $userId, 'deposits', [
-    'user' => ['user_id'],
-    'status' => ['status'],
-    'currency' => ['currency'],
-    'amount' => ['net_amount', 'amount'],
-]);
-
-$completedGbpWithdrawals = 0.0;
-$withdrawalTables = ['withdrawals', 'fiat_withdrawals', 'withdrawal_requests'];
-foreach ($withdrawalTables as $withdrawalTable) {
-    $tableTotal = list_sum_completed_gbp_for_table($dbc, $userId, $withdrawalTable, [
-        'user' => ['user_id'],
-        'status' => ['status', 'state'],
-        'currency' => ['currency', 'fiat_currency', 'asset'],
-        'amount' => ['net_amount', 'amount', 'withdrawal_amount'],
-    ]);
-
-    if ($tableTotal > 0) {
-        $completedGbpWithdrawals += $tableTotal;
-    }
-}
-
-$fiatAreaBalance = $completedGbpDeposits - $completedGbpWithdrawals;
-$fiatBalanceAbsFormatted = number_format(abs($fiatAreaBalance), 2, '.', ',');
-$fiatBalanceParts = explode('.', $fiatBalanceAbsFormatted);
-$fiatBalanceMajor = $fiatBalanceParts[0] ?? '0';
-$fiatBalanceMinor = $fiatBalanceParts[1] ?? '00';
-$fiatBalanceSign = $fiatAreaBalance < 0 ? '-' : '';
-
 api_json_response(200, true, 'deposit_activity_list', 'Deposit activity fetched', [
     'all' => $payload,
     'recent' => array_slice($payload, 0, 3),
     'balance' => [
-        'amount' => $fiatAreaBalance,
-        'sign' => $fiatBalanceSign,
-        'major' => $fiatBalanceMajor,
-        'minor' => $fiatBalanceMinor,
-        'formatted' => $fiatBalanceSign . $fiatBalanceMajor . '.' . $fiatBalanceMinor,
+        'amount' => (float)($balancePayload['amount'] ?? 0.0),
+        'sign' => (string)($balancePayload['sign'] ?? ''),
+        'major' => (string)($balancePayload['major'] ?? '0'),
+        'minor' => (string)($balancePayload['minor'] ?? '00'),
+        'formatted' => (string)($balancePayload['formatted'] ?? '0.00'),
+        'currency' => (string)($balancePayload['currency'] ?? 'GBP'),
+        'source' => (string)($balancePayload['source'] ?? 'none'),
     ],
 ]);

@@ -200,11 +200,54 @@ if(!isset($pageTitle)) $pageTitle = 'FinPay Pro';
                 return;
             }
 
+            var suppressNextPopClose = false;
+            var closingFromBrowserBack = false;
+
+            function getVisibleRightOffcanvas() {
+                var shown = document.querySelectorAll('.offcanvas.offcanvas-end.show');
+                if (!shown || shown.length === 0) {
+                    return null;
+                }
+                return shown[shown.length - 1];
+            }
+
             document.querySelectorAll('.offcanvas.offcanvas-end').forEach(function (node) {
                 window.bootstrap.Offcanvas.getOrCreateInstance(node, {
                     backdrop: 'static',
                     keyboard: false,
                 });
+
+                node.addEventListener('shown.bs.offcanvas', function () {
+                    history.pushState({ finpayOffcanvas: true, offcanvasId: node.id || null }, document.title);
+                });
+
+                node.addEventListener('hidden.bs.offcanvas', function () {
+                    if (closingFromBrowserBack) {
+                        closingFromBrowserBack = false;
+                        return;
+                    }
+
+                    if (history.state && history.state.finpayOffcanvas) {
+                        suppressNextPopClose = true;
+                        history.back();
+                    }
+                });
+            });
+
+            window.addEventListener('popstate', function () {
+                if (suppressNextPopClose) {
+                    suppressNextPopClose = false;
+                    return;
+                }
+
+                var activeOffcanvas = getVisibleRightOffcanvas();
+                if (!activeOffcanvas) {
+                    return;
+                }
+
+                closingFromBrowserBack = true;
+                var instance = window.bootstrap.Offcanvas.getInstance(activeOffcanvas) || window.bootstrap.Offcanvas.getOrCreateInstance(activeOffcanvas);
+                instance.hide();
             });
         });
     </script>
