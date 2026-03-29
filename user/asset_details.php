@@ -931,6 +931,36 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                     }).join('');
                 }
 
+                function resetDepositFlow() {
+                    selectedDepositNetwork = null;
+                    renderDepositNetworks();
+                    if (depositStep2) depositStep2.classList.add('d-none');
+                    if (depositStep1) depositStep1.classList.remove('d-none');
+                    if (depositStepBadge) depositStepBadge.textContent = 'Step 1/2';
+                    if (depositNetworkMeta) depositNetworkMeta.textContent = '';
+                    if (depositAddressEl) depositAddressEl.textContent = '';
+                    if (depositQrImage) depositQrImage.removeAttribute('src');
+                    hideInlineNetworkWarning(depositWarningBox);
+                    depositWarningAfterConfirm = null;
+                }
+
+                function resetWithdrawFlow() {
+                    selectedWithdrawNetwork = null;
+                    renderWithdrawNetworks();
+                    if (withdrawStep2) withdrawStep2.classList.add('d-none');
+                    if (withdrawStep1) withdrawStep1.classList.remove('d-none');
+                    if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 1/2';
+                    if (withdrawNetworkMeta) withdrawNetworkMeta.textContent = '';
+                    if (withdrawFeeText) withdrawFeeText.textContent = '--';
+                    if (withdrawAddressInput) withdrawAddressInput.value = '';
+                    if (withdrawAmountInput) withdrawAmountInput.value = '';
+                    hideInlineNetworkWarning(withdrawWarningBox);
+                    withdrawWarningAfterConfirm = null;
+                    if (withdrawReviewBtn) {
+                        withdrawReviewBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Review Withdrawal';
+                    }
+                }
+
                 renderDepositNetworks();
                 renderWithdrawNetworks();
 
@@ -1075,6 +1105,23 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                         withdrawReviewBtn.innerHTML = '<i class="fas fa-check"></i> Ready for Confirmation';
                     });
                 }
+
+                var depositModalEl = document.getElementById('assetDepositModal');
+                if (depositModalEl) {
+                    depositModalEl.addEventListener('hidden.bs.offcanvas', function () {
+                        resetDepositFlow();
+                    });
+                }
+
+                var withdrawModalEl = document.getElementById('assetWithdrawModal');
+                if (withdrawModalEl) {
+                    withdrawModalEl.addEventListener('hidden.bs.offcanvas', function () {
+                        resetWithdrawFlow();
+                    });
+                }
+
+                resetDepositFlow();
+                resetWithdrawFlow();
             }
 
             function applySwapDefaults() {
@@ -1083,6 +1130,16 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 if (!modal || !cfg) {
                     return;
                 }
+
+                var payInput = modal.querySelector('.swap-input-box:first-child input');
+                var receiveInput = modal.querySelector('.swap-input-box:nth-child(3) input');
+                var reviewOrderBtn = modal.querySelector('.mt-4.mt-auto.w-100 button.btn-pro.btn-pro-primary');
+
+                var defaultState = {
+                    payInput: payInput ? payInput.value : '',
+                    receiveInput: receiveInput ? receiveInput.value : '',
+                    reviewBtnHtml: reviewOrderBtn ? reviewOrderBtn.innerHTML : '',
+                };
 
                 var boxes = modal.querySelectorAll('.swap-input-box');
                 if (!boxes || boxes.length < 2) {
@@ -1122,6 +1179,23 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 if (helper) {
                     helper.innerHTML = '<i class="fas fa-shield-alt text-success me-1"></i> Swaps restricted to GBP \u2194 ' + cfg.symbol + ' securely.';
                 }
+
+                modal.addEventListener('hidden.bs.offcanvas', function () {
+                    if (payInput) {
+                        payInput.value = defaultState.payInput;
+                    }
+                    if (receiveInput) {
+                        receiveInput.value = defaultState.receiveInput;
+                    }
+                    if (reviewOrderBtn && defaultState.reviewBtnHtml) {
+                        reviewOrderBtn.innerHTML = defaultState.reviewBtnHtml;
+                    }
+
+                    var scrollBody = modal.querySelector('.chat-body');
+                    if (scrollBody) {
+                        scrollBody.scrollTop = 0;
+                    }
+                });
             }
 
             document.addEventListener('DOMContentLoaded', function () {

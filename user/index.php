@@ -200,6 +200,7 @@ if (!empty($allActivities)) {
     foreach ($allActivities as $activity) {
         $meta = dashboard_deposit_activity_meta((string)($activity['method'] ?? ''), (string)($activity['status'] ?? ''));
         $allActivitiesPayload[] = [
+            'activity_id' => (string)($activity['activity_id'] ?? 'n/a'),
             'activity_type' => ucfirst((string)($activity['activity_type'] ?? 'Activity')),
             'label' => (string)$meta['label'],
             'status_raw' => (string)($activity['status'] ?? 'unknown'),
@@ -214,6 +215,122 @@ if (!empty($allActivities)) {
         ];
     }
 }
+
+function dashboard_table_exists(mysqli $dbc, string $table): bool
+{
+    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
+    if ($safeTable === '') {
+        return false;
+    }
+
+    $result = mysqli_query($dbc, "SHOW TABLES LIKE '{$safeTable}'");
+    return $result && mysqli_num_rows($result) > 0;
+}
+
+function dashboard_table_columns(mysqli $dbc, string $table): array
+{
+    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
+    if ($safeTable === '') {
+        return [];
+    }
+
+    $columns = [];
+    $result = mysqli_query($dbc, "SHOW COLUMNS FROM {$safeTable}");
+    if ($result) {
+        while ($row = mysqli_fetch_assoc($result)) {
+            $columns[] = (string)($row['Field'] ?? '');
+        }
+    }
+
+    return $columns;
+}
+
+function dashboard_first_existing_column(array $columns, array $candidates): ?string
+{
+    foreach ($candidates as $candidate) {
+        if (in_array($candidate, $columns, true)) {
+            return $candidate;
+        }
+    }
+
+    return null;
+}
+
+function dashboard_sum_completed_gbp_for_table(mysqli $dbc, int $userId, string $table, array $columnMap): float
+{
+    if (!dashboard_table_exists($dbc, $table)) {
+        return 0.0;
+    }
+
+    $columns = dashboard_table_columns($dbc, $table);
+    if (empty($columns)) {
+        return 0.0;
+    }
+
+    $userCol = dashboard_first_existing_column($columns, $columnMap['user']);
+    $statusCol = dashboard_first_existing_column($columns, $columnMap['status']);
+    $currencyCol = dashboard_first_existing_column($columns, $columnMap['currency']);
+    $amountCol = dashboard_first_existing_column($columns, $columnMap['amount']);
+
+    if ($userCol === null || $statusCol === null || $currencyCol === null || $amountCol === null) {
+        return 0.0;
+    }
+
+    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
+    $sql = "SELECT COALESCE(SUM({$amountCol}), 0) AS total
+            FROM {$safeTable}
+            WHERE {$userCol} = ?
+              AND LOWER({$statusCol}) = 'completed'
+              AND UPPER({$currencyCol}) = 'GBP'";
+
+    $stmt = mysqli_prepare($dbc, $sql);
+    if (!$stmt) {
+        return 0.0;
+    }
+
+    mysqli_stmt_bind_param($stmt, 'i', $userId);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    $row = $result ? mysqli_fetch_assoc($result) : null;
+    mysqli_stmt_close($stmt);
+
+    return (float)($row['total'] ?? 0);
+}
+
+$fiatAreaBalance = 0.0;
+if (isset($dbc, $_SESSION['user_id'])) {
+    $safeUserId = (int)$_SESSION['user_id'];
+
+    $completedGbpDeposits = dashboard_sum_completed_gbp_for_table($dbc, $safeUserId, 'deposits', [
+        'user' => ['user_id'],
+        'status' => ['status'],
+        'currency' => ['currency'],
+        'amount' => ['net_amount', 'amount'],
+    ]);
+
+    $completedGbpWithdrawals = 0.0;
+    $withdrawalTables = ['withdrawals', 'fiat_withdrawals', 'withdrawal_requests'];
+    foreach ($withdrawalTables as $withdrawalTable) {
+        $tableTotal = dashboard_sum_completed_gbp_for_table($dbc, $safeUserId, $withdrawalTable, [
+            'user' => ['user_id'],
+            'status' => ['status', 'state'],
+            'currency' => ['currency', 'fiat_currency', 'asset'],
+            'amount' => ['net_amount', 'amount', 'withdrawal_amount'],
+        ]);
+
+        if ($tableTotal > 0) {
+            $completedGbpWithdrawals += $tableTotal;
+        }
+    }
+
+    $fiatAreaBalance = $completedGbpDeposits - $completedGbpWithdrawals;
+}
+
+$fiatBalanceAbsFormatted = number_format(abs($fiatAreaBalance), 2, '.', ',');
+$fiatBalanceParts = explode('.', $fiatBalanceAbsFormatted);
+$fiatBalanceMajor = $fiatBalanceParts[0] ?? '0';
+$fiatBalanceMinor = $fiatBalanceParts[1] ?? '00';
+$fiatBalanceSign = $fiatAreaBalance < 0 ? '-' : '';
 
 require_once 'templates/head.php';
 ?>
@@ -243,9 +360,9 @@ require_once 'templates/head.php';
             <div class="panel-left">
                 
                 <div class="balance-hero">
-                    <div class="balance-label">Total Portfolio Value</div>
+                    <div class="balance-label">Total Account Balance</div>
                     <div class="balance-amount">
-                        <span class="balance-currency">£</span>12,450<span style="color: var(--text-secondary); font-size: 3rem;">.00</span>
+                        <span id="totalBalanceSign"><?php echo htmlspecialchars($fiatBalanceSign, ENT_QUOTES, 'UTF-8'); ?></span><span class="balance-currency">£</span><span id="totalBalanceMajor"><?php echo htmlspecialchars($fiatBalanceMajor, ENT_QUOTES, 'UTF-8'); ?></span><span style="color: var(--text-secondary); font-size: 3rem;">.<span id="totalBalanceMinor"><?php echo htmlspecialchars($fiatBalanceMinor, ENT_QUOTES, 'UTF-8'); ?></span></span>
                     </div>
                     
                     <div class="action-grid">
@@ -266,7 +383,7 @@ require_once 'templates/head.php';
                                 <div class="asset-sub">Primary Account</div>
                             </div>
                             <div class="asset-value">
-                                <div class="asset-price">£4,209.50</div>
+                                <div id="primaryAccountBalance" class="asset-price"><?php echo htmlspecialchars($fiatBalanceSign, ENT_QUOTES, 'UTF-8'); ?>£<?php echo htmlspecialchars($fiatBalanceMajor, ENT_QUOTES, 'UTF-8'); ?>.<?php echo htmlspecialchars($fiatBalanceMinor, ENT_QUOTES, 'UTF-8'); ?></div>
                             </div>
                         </div>
                         
@@ -328,7 +445,7 @@ require_once 'templates/head.php';
                     <h3 class="section-heading mb-0">Activity</h3>
                     <button type="button" data-bs-toggle="offcanvas" data-bs-target="#allActivityModal" style="font-size: 0.85rem; color: var(--accent); font-weight: 600; text-decoration: none; background: transparent; border: none; padding: 0;">See All <i class="fas fa-chevron-right ms-1" style="font-size: 0.75rem;"></i></button>
                 </div>
-                <div class="list-pro">
+                <div id="recentActivityList" class="list-pro">
                     <?php if (!empty($recentActivities)): ?>
                         <?php foreach ($recentActivities as $activity): ?>
                             <?php
@@ -711,7 +828,7 @@ require_once 'templates/head.php';
     <script>
         const STRIPE_PUBLISHABLE_KEY = '<?php echo htmlspecialchars($apiConfig['stripe_publishable_key'] ?? '', ENT_QUOTES); ?>';
         const API_BASE_URL = window.FINPAY_API_BASE_URL || '../api/v1';
-        const ALL_ACTIVITIES = <?php echo json_encode($allActivitiesPayload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        let ALL_ACTIVITIES = <?php echo json_encode($allActivitiesPayload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
         let selectedMethod = 'bank';
         let activeCardDepositId = null;
         let activeCardClientSecret = null;
@@ -721,6 +838,8 @@ require_once 'templates/head.php';
         let cardElement = null;
         let renderedActivityCount = 0;
         let isAppendingActivities = false;
+        let activityPollTimer = null;
+        let lastActivitySignature = '';
 
         const INITIAL_ACTIVITY_BATCH = 15;
         const NEXT_ACTIVITY_BATCH = 6;
@@ -992,6 +1111,7 @@ require_once 'templates/head.php';
             row.dataset.activityCurrency = activity.currency || 'GBP';
             row.dataset.activityCreated = activity.created_label || 'N/A';
             row.dataset.activityCompleted = activity.completed_label || 'N/A';
+            row.dataset.activityId = activity.activity_id || 'n/a';
 
             const iconTone = getIconTone(row.dataset.activityIcon);
             const statusColor = getStatusColor(row.dataset.activityStatus);
@@ -1009,6 +1129,141 @@ require_once 'templates/head.php';
             `;
 
             return row;
+        }
+
+        function createRecentActivityRow(activity) {
+            const row = document.createElement('div');
+            row.className = 'asset-row';
+            row.style.padding = '0.75rem 1rem';
+            row.dataset.bsToggle = 'offcanvas';
+            row.dataset.bsTarget = '#activityDetailsModal';
+            row.dataset.activityType = activity.activity_type || 'Activity';
+            row.dataset.activityLabel = activity.label || 'Activity';
+            row.dataset.activityStatus = activity.status_raw || 'pending';
+            row.dataset.activityMethod = activity.method || 'n/a';
+            row.dataset.activityIcon = activity.icon_class || 'fas fa-arrow-down';
+            row.dataset.activityAmount = activity.amount || '0.00';
+            row.dataset.activityCurrency = activity.currency || 'GBP';
+            row.dataset.activityCreated = activity.created_label || 'N/A';
+            row.dataset.activityCompleted = activity.completed_label || 'N/A';
+            row.dataset.activityId = activity.activity_id || 'n/a';
+
+            const iconTone = getIconTone(row.dataset.activityIcon);
+
+            row.innerHTML = `
+                <div class="asset-icon" style="background: ${iconTone.bg}; color: ${iconTone.color}; width: 40px; height: 40px; font-size: 1.1rem;"><i class="${row.dataset.activityIcon}"></i></div>
+                <div class="asset-info">
+                    <div class="asset-name" style="font-size: 0.95rem;">${row.dataset.activityLabel}</div>
+                    <div class="asset-sub">${activity.time_label || 'Recently'} • ${activity.status_sub || normalizeStatusLabel(row.dataset.activityStatus)}</div>
+                </div>
+                <div class="asset-value">
+                    <div class="asset-price text-success" style="font-size: 0.95rem;">+ ${row.dataset.activityCurrency} ${row.dataset.activityAmount}</div>
+                </div>
+            `;
+
+            return row;
+        }
+
+        function renderRecentActivityList(items) {
+            const listEl = document.getElementById('recentActivityList');
+            if (!listEl) {
+                return;
+            }
+
+            const activities = Array.isArray(items) ? items : [];
+            listEl.innerHTML = '';
+
+            if (activities.length === 0) {
+                listEl.innerHTML = `
+                    <div class="asset-row" style="padding: 0.85rem 1rem; cursor: default;">
+                        <div class="asset-icon" style="background: var(--icon-bg-default); width: 40px; height: 40px; font-size: 1.1rem;"><i class="fas fa-clock"></i></div>
+                        <div class="asset-info">
+                            <div class="asset-name" style="font-size: 0.95rem;">No recent activity yet</div>
+                            <div class="asset-sub">Your latest platform activity will appear here.</div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            activities.forEach((item) => {
+                listEl.appendChild(createRecentActivityRow(item));
+            });
+        }
+
+        function buildActivitySignature(items) {
+            if (!Array.isArray(items) || items.length === 0) {
+                return 'empty';
+            }
+
+            return items.slice(0, 25).map((item) => {
+                return [
+                    item.activity_id || 'n/a',
+                    item.status_raw || 'unknown',
+                    item.amount || '0.00',
+                    item.completed_label || 'N/A',
+                ].join('|');
+            }).join('~');
+        }
+
+            function applyRealtimeBalance(balance) {
+                if (!balance || typeof balance !== 'object') {
+                    return;
+                }
+
+                const sign = String(balance.sign || '');
+                const major = String(balance.major || '0');
+                const minor = String(balance.minor || '00');
+
+                const totalSignEl = document.getElementById('totalBalanceSign');
+                const totalMajorEl = document.getElementById('totalBalanceMajor');
+                const totalMinorEl = document.getElementById('totalBalanceMinor');
+                const primaryAccountEl = document.getElementById('primaryAccountBalance');
+
+                if (totalSignEl) totalSignEl.textContent = sign;
+                if (totalMajorEl) totalMajorEl.textContent = major;
+                if (totalMinorEl) totalMinorEl.textContent = minor;
+                if (primaryAccountEl) primaryAccountEl.textContent = sign + '£' + major + '.' + minor;
+            }
+
+        async function refreshActivityRealtime() {
+            try {
+                const response = await apiCall('/deposits/list.php?limit=500', 'GET');
+                const nextAll = response.data && Array.isArray(response.data.all) ? response.data.all : [];
+                const nextRecent = response.data && Array.isArray(response.data.recent) ? response.data.recent : [];
+                const nextBalance = response.data && response.data.balance ? response.data.balance : null;
+                const signature = buildActivitySignature(nextAll) + '|' + (nextBalance && nextBalance.formatted ? nextBalance.formatted : '0.00');
+
+                if (signature === lastActivitySignature) {
+                    return;
+                }
+
+                lastActivitySignature = signature;
+                ALL_ACTIVITIES = nextAll;
+                renderRecentActivityList(nextRecent);
+                applyRealtimeBalance(nextBalance);
+
+                const allActivityModalEl = document.getElementById('allActivityModal');
+                if (allActivityModalEl && allActivityModalEl.classList.contains('show')) {
+                    resetAllActivityFeed();
+                }
+            } catch (error) {
+                // Keep UI stable on temporary network/API errors.
+            }
+        }
+
+        function startActivityRealtimePolling() {
+            refreshActivityRealtime();
+            if (activityPollTimer) {
+                clearInterval(activityPollTimer);
+            }
+
+            activityPollTimer = setInterval(function () {
+                if (document.visibilityState === 'hidden') {
+                    return;
+                }
+                refreshActivityRealtime();
+            }, 6000);
         }
 
         function appendMoreActivities(batchSize) {
@@ -1275,6 +1530,13 @@ require_once 'templates/head.php';
         }
 
         updateDepositButton();
+        startActivityRealtimePolling();
+
+        window.addEventListener('beforeunload', function () {
+            if (activityPollTimer) {
+                clearInterval(activityPollTimer);
+            }
+        });
     </script>
 </body>
 </html>
