@@ -1,20 +1,10 @@
 version: 0.2
-# -------------------------------------------------------
-# Finpay Technologies - CodeBuild Build Specification
-# Builds the PHP application Docker image, runs PHPUnit
-# tests, pushes the image to ECR, and produces the
-# imagedefinitions.json file for ECS deployment.
-# -------------------------------------------------------
 
 env:
   variables:
     IMAGE_TAG: latest
-  # These are injected by CodePipeline / CodeBuild environment
-  # AWS_ACCOUNT_ID, AWS_DEFAULT_REGION, ECR_REPO_URI, ENVIRONMENT
 
 phases:
-
-  # ── Install Phase ──────────────────────────────────────
   install:
     runtime-versions:
       php: 8.2
@@ -23,7 +13,6 @@ phases:
       - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
       - composer install --no-interaction --prefer-dist
 
-  # ── Pre-Build Phase ────────────────────────────────────
   pre_build:
     commands:
       - echo "Running PHPUnit tests..."
@@ -38,7 +27,6 @@ phases:
       - IMAGE_TAG_VERSIONED=v$COMMIT_HASH
       - echo "Image tag - $IMAGE_TAG_VERSIONED"
 
-  # ── Build Phase ────────────────────────────────────────
   build:
     commands:
       - echo "Building Docker image..."
@@ -46,7 +34,6 @@ phases:
       - docker tag $ECR_REPO_URI:$IMAGE_TAG_VERSIONED $ECR_REPO_URI:latest
       - echo "Docker image built successfully."
 
-  # ── Post-Build Phase ───────────────────────────────────
   post_build:
     commands:
       - echo "Pushing Docker image to ECR..."
@@ -55,26 +42,23 @@ phases:
       - echo "Image pushed successfully - $ECR_REPO_URI:$IMAGE_TAG_VERSIONED"
 
       - echo "Writing imagedefinitions.json for ECS deployment..."
-      - printf '[{"name":"backend","imageUri":"%s"}]' $ECR_REPO_URI:$IMAGE_TAG_VERSIONED > imagedefinitions.json
+      - printf '[{"name":"finpay-container","imageUri":"%s"}]' $ECR_REPO_URI:$IMAGE_TAG_VERSIONED > imagedefinitions.json
       - cat imagedefinitions.json
 
       - echo "Build complete."
 
-# ── Artifacts ──────────────────────────────────────────
 artifacts:
   files:
     - imagedefinitions.json
     - phpunit-results.txt
   discard-paths: yes
 
-# ── Reports ────────────────────────────────────────────
 reports:
   phpunit-report:
     files:
       - phpunit-results.txt
     discard-paths: yes
 
-# ── Cache ──────────────────────────────────────────────
 cache:
   paths:
     - vendor/**/*
