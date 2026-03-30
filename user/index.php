@@ -3,126 +3,370 @@ $pageTitle = 'FinPay Pro - Dashboard';
 $activePage = 'dashboard';
 require_once __DIR__ . '/../includes/init.php';
 require_once __DIR__ . '/../api/v1/lib/config.php';
+require_once __DIR__ . '/../includes/available_balance.php';
 $apiConfig = api_config();
 
 $recentActivities = [];
 $allActivities = [];
 
-if (isset($dbc, $_SESSION['user_id'])) {
-    $safeUserId = (int)$_SESSION['user_id'];
-    $tableExistsResult = mysqli_query($dbc, "SHOW TABLES LIKE 'deposits'");
-
-    if ($tableExistsResult && mysqli_num_rows($tableExistsResult) > 0) {
-        $columnsResult = mysqli_query($dbc, 'SHOW COLUMNS FROM deposits');
-        $depositColumns = [];
-
-        if ($columnsResult) {
-            while ($col = mysqli_fetch_assoc($columnsResult)) {
-                $depositColumns[] = $col['Field'];
-            }
-        }
-
-        $idExpr = in_array('deposit_id', $depositColumns, true)
-            ? 'deposit_id'
-            : (in_array('public_id', $depositColumns, true) ? 'public_id' : 'CAST(id AS CHAR)');
-
-        $netAmountExpr = in_array('net_amount', $depositColumns, true)
-            ? 'net_amount'
-            : (in_array('amount', $depositColumns, true) ? 'amount' : '0');
-
-        $completedAtExpr = in_array('completed_at', $depositColumns, true)
-            ? 'completed_at'
-            : (in_array('settled_at', $depositColumns, true) ? 'settled_at' : 'created_at');
-
-        $sql = "SELECT
-                    {$idExpr} AS activity_id,
-                    method,
-                    currency,
-                    {$netAmountExpr} AS net_amount,
-                    status,
-                    provider,
-                    created_at,
-                    {$completedAtExpr} AS completed_at
-                FROM deposits
-                WHERE user_id = ?
-                ORDER BY created_at DESC
-                LIMIT 3";
-
-        $stmt = mysqli_prepare($dbc, $sql);
-        if ($stmt) {
-            mysqli_stmt_bind_param($stmt, 'i', $safeUserId);
-            mysqli_stmt_execute($stmt);
-            $result = mysqli_stmt_get_result($stmt);
-
-            if ($result) {
-                while ($row = mysqli_fetch_assoc($result)) {
-                    $row['activity_type'] = 'deposit';
-                    $recentActivities[] = $row;
-                }
-            }
-
-            mysqli_stmt_close($stmt);
+function dashboard_first_existing_column(array $columns, array $candidates): ?string
+{
+    foreach ($candidates as $candidate) {
+        if (in_array($candidate, $columns, true)) {
+            return $candidate;
         }
     }
+
+    return null;
+}
+
+function dashboard_mask_account_number(string $accountNumber): string
+{
+    $digits = preg_replace('/[^0-9]/', '', $accountNumber);
+    if ($digits === '') {
+        return 'account hidden';
+    }
+
+    return '****' . substr($digits, -4);
+}
+
+function dashboard_clamp_contact_name(string $name, int $max = 48): string
+{
+    $clean = trim($name);
+    if ($clean === '') {
+        return 'Saved contact';
+    }
+
+    if (mb_strlen($clean) <= $max) {
+        return $clean;
+    }
+
+    return rtrim(mb_substr($clean, 0, $max - 1)) . '...';
+}
+
+function dashboard_resolve_contact_payment_details(mysqli $dbc, int $userId, ?string $reference): array
+{
+    static $cache = [];
+
+    $ref = trim((string)$reference);
+    if ($ref === '') {
+        return [];
+    }
+
+    if (array_key_exists($ref, $cache)) {
+        return $cache[$ref];
+    }
+
+    if (!preg_match('/^CP-(\d+)-(\d+)-(\d+)$/', $ref, $matches)) {
+        $cache[$ref] = [];
+        return [];
+    }
+
+    $refUserId = (int)$matches[1];
+    $contactId = (int)$matches[2];
+    if ($refUserId !== $userId || $contactId <= 0 || !finpay_balance_table_exists($dbc, 'payment_contacts')) {
+        $cache[$ref] = [];
+        return [];
+    }
+
+    $stmt = mysqli_prepare($dbc, 'SELECT recipient_name, account_number FROM payment_contacts WHERE id = ? AND user_id = ? LIMIT 1');
+    if (!$stmt) {
+        $cache[$ref] = [];
+        return [];
+    }
+
+    mysqli_stmt_bind_param($stmt, 'ii', $contactId, $userId);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    $row = $result ? mysqli_fetch_assoc($result) : null;
+    mysqli_stmt_close($stmt);
+
+    if (!$row) {
+        $cache[$ref] = [];
+        return [];
+    }
+
+    $name = dashboard_clamp_contact_name((string)($row['recipient_name'] ?? ''), 48);
+
+    $masked = dashboard_mask_account_number((string)($row['account_number'] ?? ''));
+    $cache[$ref] = [
+        'display_label' => 'Payment to ' . $name,
+        'display_method' => $name . ' (' . $masked . ')',
+    ];
+
+    return $cache[$ref];
+}
+
+function dashboard_build_activity_row(
+    array $row,
+    string $activityType,
+    string $idCol,
+    string $amountCol,
+    string $currencyCol,
+    string $statusCol,
+    string $methodCol,
+    string $createdCol,
+    string $completedCol,
+    ?string $providerCol,
+    string $defaultLabel
+): array {
+    return [
+        'activity_id' => (string)($row[$idCol] ?? 'n/a'),
+        'activity_type' => $activityType,
+        'method' => (string)($row[$methodCol] ?? $defaultLabel),
+        'method_raw' => (string)($row[$methodCol] ?? $defaultLabel),
+        'currency' => strtoupper((string)($row[$currencyCol] ?? 'GBP')),
+        'net_amount' => (float)($row[$amountCol] ?? 0.0),
+        'status' => (string)($row[$statusCol] ?? 'pending'),
+        'provider' => $providerCol !== null ? (string)($row[$providerCol] ?? $defaultLabel) : $defaultLabel,
+        'created_at' => (string)($row[$createdCol] ?? ''),
+        'completed_at' => (string)($row[$completedCol] ?? ''),
+    ];
+}
+
+function dashboard_fetch_deposit_activities(mysqli $dbc, int $userId, int $limit): array
+{
+    if (!finpay_balance_table_exists($dbc, 'deposits')) {
+        return [];
+    }
+
+    $columns = finpay_balance_table_columns($dbc, 'deposits');
+    if (empty($columns)) {
+        return [];
+    }
+
+    $idCol = dashboard_first_existing_column($columns, ['deposit_id', 'public_id', 'id']);
+    $userCol = dashboard_first_existing_column($columns, ['user_id']);
+    $amountCol = dashboard_first_existing_column($columns, ['net_amount', 'amount']);
+    $currencyCol = dashboard_first_existing_column($columns, ['currency']);
+    $statusCol = dashboard_first_existing_column($columns, ['status']);
+    $methodCol = dashboard_first_existing_column($columns, ['method']);
+    $providerCol = dashboard_first_existing_column($columns, ['provider']);
+    $createdCol = dashboard_first_existing_column($columns, ['created_at']);
+    $completedCol = dashboard_first_existing_column($columns, ['completed_at', 'settled_at', 'created_at']);
+
+    if ($idCol === null || $userCol === null || $amountCol === null || $currencyCol === null || $statusCol === null || $methodCol === null || $createdCol === null || $completedCol === null) {
+        return [];
+    }
+
+    $sql = "SELECT * FROM deposits WHERE {$userCol} = ? ORDER BY {$createdCol} DESC LIMIT ?";
+    $stmt = mysqli_prepare($dbc, $sql);
+    if (!$stmt) {
+        return [];
+    }
+
+    mysqli_stmt_bind_param($stmt, 'ii', $userId, $limit);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    $items = [];
+    if ($result) {
+        while ($row = mysqli_fetch_assoc($result)) {
+            $items[] = dashboard_build_activity_row(
+                $row,
+                'deposit',
+                $idCol,
+                $amountCol,
+                $currencyCol,
+                $statusCol,
+                $methodCol,
+                $createdCol,
+                $completedCol,
+                $providerCol,
+                'deposit'
+            );
+        }
+    }
+
+    mysqli_stmt_close($stmt);
+    return $items;
+}
+
+function dashboard_fetch_withdrawal_activities(mysqli $dbc, int $userId, int $limitPerTable): array
+{
+    $items = [];
+    $tables = ['withdrawals', 'fiat_withdrawals', 'withdrawal_requests'];
+
+    foreach ($tables as $table) {
+        if (!finpay_balance_table_exists($dbc, $table)) {
+            continue;
+        }
+
+        $columns = finpay_balance_table_columns($dbc, $table);
+        if (empty($columns)) {
+            continue;
+        }
+
+        $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
+        $idCol = dashboard_first_existing_column($columns, ['withdrawal_id', 'public_id', 'id']);
+        $userCol = dashboard_first_existing_column($columns, ['user_id']);
+        $amountCol = dashboard_first_existing_column($columns, ['net_amount', 'amount', 'withdrawal_amount']);
+        $currencyCol = dashboard_first_existing_column($columns, ['currency', 'fiat_currency', 'asset']);
+        $statusCol = dashboard_first_existing_column($columns, ['status', 'state']);
+        $methodCol = dashboard_first_existing_column($columns, ['method', 'type', 'transaction_type', 'category', 'source', 'reason']);
+        $referenceCol = dashboard_first_existing_column($columns, ['reference', 'payment_reference', 'note', 'narration']);
+        $createdCol = dashboard_first_existing_column($columns, ['created_at', 'requested_at', 'initiated_at', 'created_on']);
+        $completedCol = dashboard_first_existing_column($columns, ['completed_at', 'processed_at', 'settled_at', 'updated_at', 'approved_at', 'created_at']);
+
+        if ($safeTable === '' || $idCol === null || $userCol === null || $amountCol === null || $currencyCol === null || $statusCol === null || $methodCol === null || $createdCol === null || $completedCol === null) {
+            continue;
+        }
+
+        $sql = "SELECT * FROM {$safeTable} WHERE {$userCol} = ? ORDER BY {$createdCol} DESC LIMIT ?";
+        $stmt = mysqli_prepare($dbc, $sql);
+        if (!$stmt) {
+            continue;
+        }
+
+        mysqli_stmt_bind_param($stmt, 'ii', $userId, $limitPerTable);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+
+        if ($result) {
+            while ($row = mysqli_fetch_assoc($result)) {
+                $item = dashboard_build_activity_row(
+                    $row,
+                    'withdrawal',
+                    $idCol,
+                    $amountCol,
+                    $currencyCol,
+                    $statusCol,
+                    $methodCol,
+                    $createdCol,
+                    $completedCol,
+                    null,
+                    $safeTable
+                );
+
+                if ($referenceCol !== null) {
+                    $item['reference'] = (string)($row[$referenceCol] ?? '');
+                }
+
+                if (strtolower((string)$item['method_raw']) === 'contact_payment') {
+                    $details = dashboard_resolve_contact_payment_details($dbc, $userId, (string)($item['reference'] ?? ''));
+                    if (!empty($details['display_label'])) {
+                        $item['display_label'] = (string)$details['display_label'];
+                    }
+                    if (!empty($details['display_method'])) {
+                        $item['display_method'] = (string)$details['display_method'];
+                    }
+                }
+
+                $items[] = $item;
+            }
+        }
+
+        mysqli_stmt_close($stmt);
+    }
+
+    return $items;
+}
+
+function dashboard_is_completed_status(string $status): bool
+{
+    $normalized = strtolower(trim($status));
+    return in_array($normalized, ['completed', 'complete', 'settled', 'succeeded', 'success', 'approved'], true);
+}
+
+function dashboard_compute_analytics(array $activities): array
+{
+    $analytics = [
+        'week' => ['deposits' => 0.0, 'withdrawals' => 0.0, 'net' => 0.0],
+        'month' => ['deposits' => 0.0, 'withdrawals' => 0.0, 'net' => 0.0],
+        'counts' => ['deposits' => 0, 'withdrawals' => 0, 'pending' => 0, 'failed' => 0],
+        'daily' => [],
+        'dailyMaxAbs' => 0.0,
+    ];
+
+    for ($i = 6; $i >= 0; $i--) {
+        $key = date('Y-m-d', strtotime('-' . $i . ' days'));
+        $analytics['daily'][$key] = 0.0;
+    }
+
+    $now = time();
+    $weekAgo = strtotime('-7 days', $now);
+    $monthAgo = strtotime('-30 days', $now);
+
+    foreach ($activities as $activity) {
+        $status = (string)($activity['status'] ?? '');
+        $createdAt = strtotime((string)($activity['created_at'] ?? ''));
+        $currency = strtoupper((string)($activity['currency'] ?? 'GBP'));
+        $type = strtolower((string)($activity['activity_type'] ?? ''));
+        $amount = (float)($activity['net_amount'] ?? 0.0);
+
+        if ($createdAt === false) {
+            continue;
+        }
+
+        if (!dashboard_is_completed_status($status)) {
+            $statusLower = strtolower($status);
+            if (str_contains($statusLower, 'pending')) {
+                $analytics['counts']['pending'] += 1;
+            } elseif (str_contains($statusLower, 'fail') || str_contains($statusLower, 'reverse')) {
+                $analytics['counts']['failed'] += 1;
+            }
+            continue;
+        }
+
+        if ($currency !== 'GBP') {
+            continue;
+        }
+
+        if ($type === 'deposit') {
+            $analytics['counts']['deposits'] += 1;
+        } elseif ($type === 'withdrawal') {
+            $analytics['counts']['withdrawals'] += 1;
+        }
+
+        if ($createdAt >= $weekAgo) {
+            if ($type === 'deposit') {
+                $analytics['week']['deposits'] += $amount;
+            } elseif ($type === 'withdrawal') {
+                $analytics['week']['withdrawals'] += abs($amount);
+            }
+        }
+
+        if ($createdAt >= $monthAgo) {
+            if ($type === 'deposit') {
+                $analytics['month']['deposits'] += $amount;
+            } elseif ($type === 'withdrawal') {
+                $analytics['month']['withdrawals'] += abs($amount);
+            }
+        }
+
+        $dayKey = date('Y-m-d', $createdAt);
+        if (array_key_exists($dayKey, $analytics['daily'])) {
+            $analytics['daily'][$dayKey] += ($type === 'withdrawal' ? -abs($amount) : abs($amount));
+        }
+    }
+
+    $analytics['week']['net'] = $analytics['week']['deposits'] - $analytics['week']['withdrawals'];
+    $analytics['month']['net'] = $analytics['month']['deposits'] - $analytics['month']['withdrawals'];
+
+    foreach ($analytics['daily'] as $dailyValue) {
+        $analytics['dailyMaxAbs'] = max($analytics['dailyMaxAbs'], abs($dailyValue));
+    }
+
+    return $analytics;
 }
 
 if (isset($dbc, $_SESSION['user_id'])) {
     $safeUserId = (int)$_SESSION['user_id'];
-    $tableExistsResult = mysqli_query($dbc, "SHOW TABLES LIKE 'deposits'");
+    $depositActivities = dashboard_fetch_deposit_activities($dbc, $safeUserId, 500);
+    $withdrawalActivities = dashboard_fetch_withdrawal_activities($dbc, $safeUserId, 500);
 
-    if ($tableExistsResult && mysqli_num_rows($tableExistsResult) > 0) {
-        $columnsResult = mysqli_query($dbc, 'SHOW COLUMNS FROM deposits');
-        $depositColumns = [];
+    $allActivities = array_merge($depositActivities, $withdrawalActivities);
+    usort($allActivities, function (array $a, array $b): int {
+        $aTs = strtotime((string)($a['created_at'] ?? '')) ?: 0;
+        $bTs = strtotime((string)($b['created_at'] ?? '')) ?: 0;
+        return $bTs <=> $aTs;
+    });
 
-        if ($columnsResult) {
-            while ($col = mysqli_fetch_assoc($columnsResult)) {
-                $depositColumns[] = $col['Field'];
-            }
-        }
-
-        $idExpr = in_array('deposit_id', $depositColumns, true)
-            ? 'deposit_id'
-            : (in_array('public_id', $depositColumns, true) ? 'public_id' : 'CAST(id AS CHAR)');
-
-        $netAmountExpr = in_array('net_amount', $depositColumns, true)
-            ? 'net_amount'
-            : (in_array('amount', $depositColumns, true) ? 'amount' : '0');
-
-        $completedAtExpr = in_array('completed_at', $depositColumns, true)
-            ? 'completed_at'
-            : (in_array('settled_at', $depositColumns, true) ? 'settled_at' : 'created_at');
-
-        $sql = "SELECT
-                    {$idExpr} AS activity_id,
-                    method,
-                    currency,
-                    {$netAmountExpr} AS net_amount,
-                    status,
-                    provider,
-                    created_at,
-                    {$completedAtExpr} AS completed_at
-                FROM deposits
-                WHERE user_id = ?
-                ORDER BY created_at DESC
-                LIMIT 500";
-
-        $stmt = mysqli_prepare($dbc, $sql);
-        if ($stmt) {
-            mysqli_stmt_bind_param($stmt, 'i', $safeUserId);
-            mysqli_stmt_execute($stmt);
-            $result = mysqli_stmt_get_result($stmt);
-
-            if ($result) {
-                while ($row = mysqli_fetch_assoc($result)) {
-                    $row['activity_type'] = 'deposit';
-                    $allActivities[] = $row;
-                }
-            }
-
-            mysqli_stmt_close($stmt);
-        }
-    }
+    $allActivities = array_slice($allActivities, 0, 500);
+    $recentActivities = array_slice($allActivities, 0, 3);
 }
+
+$analytics = dashboard_compute_analytics($allActivities);
 
 function dashboard_activity_time_label(?string $createdAt): string
 {
@@ -152,19 +396,29 @@ function dashboard_activity_time_label(?string $createdAt): string
     return date('j M', $createdTs);
 }
 
-function dashboard_deposit_activity_meta(string $method, string $status): array
+function dashboard_activity_meta(string $activityType, string $method, string $status): array
 {
+    $safeType = strtolower($activityType);
     $safeMethod = strtolower($method);
     $safeStatus = strtolower($status);
 
-    $map = [
-        'bank' => ['icon_class' => 'fas fa-university', 'bg' => 'rgba(59, 130, 246, 0.12)', 'color' => '#3b82f6', 'label' => 'Bank Deposit'],
-        'card' => ['icon_class' => 'fas fa-credit-card', 'bg' => 'rgba(16, 185, 129, 0.12)', 'color' => '#10b981', 'label' => 'Card Deposit'],
-        // Use the brand icon for Apple Pay instead of solid fallback icon.
-        'apple' => ['icon_class' => 'fab fa-apple', 'bg' => 'rgba(17, 24, 39, 0.10)', 'color' => 'var(--text-primary)', 'label' => 'Apple Pay Deposit'],
-    ];
+    if ($safeType === 'withdrawal') {
+        $map = [
+            'bank' => ['icon_class' => 'fas fa-money-check-alt', 'bg' => 'rgba(239, 68, 68, 0.10)', 'color' => '#ef4444', 'label' => 'Bank Withdrawal'],
+            'contact_payment' => ['icon_class' => 'fas fa-paper-plane', 'bg' => 'rgba(239, 68, 68, 0.10)', 'color' => '#ef4444', 'label' => 'Contact Payment'],
+            'card' => ['icon_class' => 'fas fa-credit-card', 'bg' => 'rgba(239, 68, 68, 0.10)', 'color' => '#ef4444', 'label' => 'Card Withdrawal'],
+        ];
 
-    $meta = $map[$safeMethod] ?? ['icon_class' => 'fas fa-arrow-down', 'bg' => 'var(--icon-bg-default)', 'color' => 'var(--text-primary)', 'label' => 'Deposit'];
+        $meta = $map[$safeMethod] ?? ['icon_class' => 'fas fa-arrow-up', 'bg' => 'rgba(239, 68, 68, 0.10)', 'color' => '#ef4444', 'label' => 'Withdrawal'];
+    } else {
+        $map = [
+            'bank' => ['icon_class' => 'fas fa-university', 'bg' => 'rgba(59, 130, 246, 0.12)', 'color' => '#3b82f6', 'label' => 'Bank Deposit'],
+            'card' => ['icon_class' => 'fas fa-credit-card', 'bg' => 'rgba(16, 185, 129, 0.12)', 'color' => '#10b981', 'label' => 'Card Deposit'],
+            'apple' => ['icon_class' => 'fab fa-apple', 'bg' => 'rgba(17, 24, 39, 0.10)', 'color' => 'var(--text-primary)', 'label' => 'Apple Pay Deposit'],
+        ];
+
+        $meta = $map[$safeMethod] ?? ['icon_class' => 'fas fa-arrow-down', 'bg' => 'var(--icon-bg-default)', 'color' => 'var(--text-primary)', 'label' => 'Deposit'];
+    }
 
     if ($safeStatus === 'completed') {
         $meta['sub'] = 'Completed';
@@ -198,16 +452,22 @@ function dashboard_activity_datetime_label(?string $timestamp): string
 $allActivitiesPayload = [];
 if (!empty($allActivities)) {
     foreach ($allActivities as $activity) {
-        $meta = dashboard_deposit_activity_meta((string)($activity['method'] ?? ''), (string)($activity['status'] ?? ''));
+        $activityTypeRaw = strtolower((string)($activity['activity_type'] ?? 'deposit'));
+        $flow = $activityTypeRaw === 'withdrawal' ? 'out' : 'in';
+        $methodRaw = (string)($activity['method_raw'] ?? $activity['method'] ?? '');
+        $meta = dashboard_activity_meta($activityTypeRaw, $methodRaw, (string)($activity['status'] ?? ''));
+        $displayLabel = (string)($activity['display_label'] ?? $meta['label']);
+        $displayMethod = (string)($activity['display_method'] ?? $methodRaw);
         $allActivitiesPayload[] = [
             'activity_id' => (string)($activity['activity_id'] ?? 'n/a'),
-            'activity_type' => ucfirst((string)($activity['activity_type'] ?? 'Activity')),
-            'label' => (string)$meta['label'],
+            'activity_type' => ucfirst($activityTypeRaw),
+            'label' => $displayLabel,
             'status_raw' => (string)($activity['status'] ?? 'unknown'),
             'status_sub' => (string)$meta['sub'],
-            'method' => (string)($activity['method'] ?? 'n/a'),
+            'method' => $displayMethod !== '' ? $displayMethod : 'n/a',
             'icon_class' => (string)($meta['icon_class'] ?? 'fas fa-arrow-down'),
             'amount' => number_format((float)($activity['net_amount'] ?? 0), 2),
+            'flow' => $flow,
             'currency' => strtoupper((string)($activity['currency'] ?? 'GBP')),
             'time_label' => dashboard_activity_time_label($activity['created_at'] ?? null),
             'created_label' => dashboard_activity_datetime_label($activity['created_at'] ?? null),
@@ -215,8 +475,6 @@ if (!empty($allActivities)) {
         ];
     }
 }
-
-require_once __DIR__ . '/../includes/available_balance.php';
 
 $fiatBalancePayload = finpay_balance_format_payload(0.0, 'none');
 if (isset($dbc, $_SESSION['user_id'])) {
@@ -227,6 +485,33 @@ $fiatAreaBalance = (float)($fiatBalancePayload['amount'] ?? 0.0);
 $fiatBalanceSign = (string)($fiatBalancePayload['sign'] ?? '');
 $fiatBalanceMajor = (string)($fiatBalancePayload['major'] ?? '0');
 $fiatBalanceMinor = (string)($fiatBalancePayload['minor'] ?? '00');
+
+$weekDeposits = (float)($analytics['week']['deposits'] ?? 0.0);
+$weekWithdrawals = (float)($analytics['week']['withdrawals'] ?? 0.0);
+$weekNet = (float)($analytics['week']['net'] ?? 0.0);
+$monthNet = (float)($analytics['month']['net'] ?? 0.0);
+$monthDeposits = (float)($analytics['month']['deposits'] ?? 0.0);
+$monthWithdrawals = (float)($analytics['month']['withdrawals'] ?? 0.0);
+$analyticsPendingCount = (int)($analytics['counts']['pending'] ?? 0);
+$analyticsDepositCount = (int)($analytics['counts']['deposits'] ?? 0);
+$analyticsWithdrawalCount = (int)($analytics['counts']['withdrawals'] ?? 0);
+
+$weeklyReference = max(1.0, $weekDeposits + $weekWithdrawals);
+$weeklyChangePercent = ($weekNet / $weeklyReference) * 100;
+$weekNetSign = $weekNet < 0 ? '-' : '+';
+$weekNetClass = $weekNet < 0 ? 'text-danger' : 'text-success';
+$weeklyChangeClass = $weeklyChangePercent < 0 ? 'text-danger' : 'text-success';
+
+$dailyBars = [];
+$dailyMaxAbs = max(1.0, (float)($analytics['dailyMaxAbs'] ?? 0.0));
+foreach (($analytics['daily'] ?? []) as $dayKey => $dayValue) {
+    $normalized = (abs((float)$dayValue) / $dailyMaxAbs) * 75 + 20;
+    $dailyBars[] = [
+        'label' => date('D', strtotime((string)$dayKey)),
+        'height' => round($normalized, 2),
+        'positive' => ((float)$dayValue) >= 0,
+    ];
+}
 
 require_once 'templates/head.php';
 ?>
@@ -318,22 +603,18 @@ require_once 'templates/head.php';
                 
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h3 class="section-heading mb-0">Analytics</h3>
-                    <div style="font-size: 0.85rem; color: var(--accent); font-weight: 600; cursor: pointer;" data-bs-toggle="offcanvas" data-bs-target="#analyticsModal">This Week <i class="fas fa-chevron-right ms-1"></i></div>
+                    <div style="font-size: 0.85rem; color: var(--accent); font-weight: 600; cursor: pointer;" data-bs-toggle="offcanvas" data-bs-target="#analyticsModal">Net Flow <i class="fas fa-chevron-right ms-1"></i></div>
                 </div>
                 
                 <div class="glass-panel text-center" style="padding: 2.5rem 1rem; margin-bottom: 2rem; cursor: pointer;" data-bs-toggle="offcanvas" data-bs-target="#analyticsModal">
                     <div style="position: relative; height: 120px; width: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 10px; opacity: 0.8;">
-                        <div style="width: 10%; background: var(--text-secondary); height: 30%; border-radius: 6px; opacity: 0.5;"></div>
-                        <div style="width: 10%; background: var(--text-secondary); height: 45%; border-radius: 6px; opacity: 0.5;"></div>
-                        <div style="width: 10%; background: var(--text-secondary); height: 20%; border-radius: 6px; opacity: 0.5;"></div>
-                        <div style="width: 10%; background: var(--accent); height: 60%; border-radius: 6px; box-shadow: 0 0 10px var(--accent-glow);"></div>
-                        <div style="width: 10%; background: var(--accent); height: 85%; border-radius: 6px; box-shadow: 0 0 10px var(--accent-glow);"></div>
-                        <div style="width: 10%; background: var(--text-secondary); height: 50%; border-radius: 6px; opacity: 0.5;"></div>
-                        <div style="width: 10%; background: var(--accent); height: 100%; border-radius: 6px; box-shadow: 0 0 20px var(--accent-glow);"></div>
+                        <?php foreach ($dailyBars as $bar): ?>
+                            <div style="width: 10%; background: <?php echo $bar['positive'] ? 'var(--accent)' : '#ef4444'; ?>; height: <?php echo htmlspecialchars((string)$bar['height'], ENT_QUOTES, 'UTF-8'); ?>%; border-radius: 6px; <?php echo $bar['positive'] ? 'box-shadow: 0 0 10px var(--accent-glow);' : 'opacity: 0.85;'; ?>"></div>
+                        <?php endforeach; ?>
                     </div>
                     <div class="mt-4">
-                        <div style="font-size: 0.95rem; color: var(--text-secondary); font-weight: 500;">Portfolio Performance</div>
-                        <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 5px;">+ £450.20 <span class="text-success" style="font-size: 1rem;">(3.8%)</span></div>
+                        <div style="font-size: 0.95rem; color: var(--text-secondary); font-weight: 500;">7-Day Net Flow (GBP)</div>
+                        <div id="analyticsSummaryValue" style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 5px;"><?php echo htmlspecialchars($weekNetSign, ENT_QUOTES, 'UTF-8'); ?> £<?php echo htmlspecialchars(number_format(abs($weekNet), 2), ENT_QUOTES, 'UTF-8'); ?> <span id="analyticsSummaryPercent" class="<?php echo htmlspecialchars($weeklyChangeClass, ENT_QUOTES, 'UTF-8'); ?>" style="font-size: 1rem;">(<?php echo htmlspecialchars(number_format($weeklyChangePercent, 1), ENT_QUOTES, 'UTF-8'); ?>%)</span></div>
                     </div>
                 </div>
 
@@ -345,9 +626,14 @@ require_once 'templates/head.php';
                     <?php if (!empty($recentActivities)): ?>
                         <?php foreach ($recentActivities as $activity): ?>
                             <?php
-                                $meta = dashboard_deposit_activity_meta((string)($activity['method'] ?? ''), (string)($activity['status'] ?? ''));
+                                $activityTypeRaw = strtolower((string)($activity['activity_type'] ?? 'deposit'));
+                                $methodRaw = (string)($activity['method_raw'] ?? $activity['method'] ?? '');
+                                $meta = dashboard_activity_meta($activityTypeRaw, $methodRaw, (string)($activity['status'] ?? ''));
+                                $displayLabel = (string)($activity['display_label'] ?? $meta['label']);
+                                $displayMethod = (string)($activity['display_method'] ?? $methodRaw);
                                 $currency = strtoupper((string)($activity['currency'] ?? 'GBP'));
                                 $amount = number_format((float)($activity['net_amount'] ?? 0), 2);
+                                $isOutflow = $activityTypeRaw === 'withdrawal';
                                 $timeLabel = dashboard_activity_time_label($activity['created_at'] ?? null);
                                 $statusSub = $meta['sub'];
                                 $activityType = ucfirst((string)($activity['activity_type'] ?? 'Activity'));
@@ -356,22 +642,23 @@ require_once 'templates/head.php';
                             ?>
                                <div class="asset-row" style="padding: 0.75rem 1rem;" data-bs-toggle="offcanvas" data-bs-target="#activityDetailsModal"
                                  data-activity-type="<?php echo htmlspecialchars($activityType, ENT_QUOTES); ?>"
-                                 data-activity-label="<?php echo htmlspecialchars($meta['label'], ENT_QUOTES); ?>"
+                                                                 data-activity-label="<?php echo htmlspecialchars($displayLabel, ENT_QUOTES); ?>"
                                  data-activity-status="<?php echo htmlspecialchars((string)($activity['status'] ?? 'unknown'), ENT_QUOTES); ?>"
-                                 data-activity-method="<?php echo htmlspecialchars((string)($activity['method'] ?? 'n/a'), ENT_QUOTES); ?>"
+                                                                 data-activity-method="<?php echo htmlspecialchars($displayMethod !== '' ? $displayMethod : 'n/a', ENT_QUOTES); ?>"
                                    data-activity-icon="<?php echo htmlspecialchars($meta['icon_class'], ENT_QUOTES); ?>"
                                  data-activity-amount="<?php echo htmlspecialchars($amount, ENT_QUOTES); ?>"
+                                 data-activity-flow="<?php echo $isOutflow ? 'out' : 'in'; ?>"
                                  data-activity-currency="<?php echo htmlspecialchars($currency, ENT_QUOTES); ?>"
                                  data-activity-created="<?php echo htmlspecialchars($createdLabel, ENT_QUOTES); ?>"
                                  data-activity-completed="<?php echo htmlspecialchars($completedLabel, ENT_QUOTES); ?>"
                                  data-activity-id="<?php echo htmlspecialchars((string)($activity['activity_id'] ?? 'n/a'), ENT_QUOTES); ?>">
                                 <div class="asset-icon" style="background: <?php echo htmlspecialchars($meta['bg'], ENT_QUOTES); ?>; color: <?php echo htmlspecialchars($meta['color'], ENT_QUOTES); ?>; width: 40px; height: 40px; font-size: 1.1rem;"><i class="<?php echo htmlspecialchars($meta['icon_class'], ENT_QUOTES); ?>"></i></div>
                                 <div class="asset-info">
-                                    <div class="asset-name" style="font-size: 0.95rem;"><?php echo htmlspecialchars($meta['label'], ENT_QUOTES); ?></div>
+                                    <div class="asset-name" style="font-size: 0.95rem;"><?php echo htmlspecialchars($displayLabel, ENT_QUOTES); ?></div>
                                     <div class="asset-sub"><?php echo htmlspecialchars($timeLabel, ENT_QUOTES); ?> • <?php echo htmlspecialchars($statusSub, ENT_QUOTES); ?></div>
                                 </div>
                                 <div class="asset-value">
-                                    <div class="asset-price text-success" style="font-size: 0.95rem;">+ <?php echo htmlspecialchars($currency, ENT_QUOTES); ?> <?php echo htmlspecialchars($amount, ENT_QUOTES); ?></div>
+                                    <div class="asset-price <?php echo $isOutflow ? 'text-danger' : 'text-success'; ?>" style="font-size: 0.95rem;"><?php echo $isOutflow ? '-' : '+'; ?> <?php echo htmlspecialchars($currency, ENT_QUOTES); ?> <?php echo htmlspecialchars($amount, ENT_QUOTES); ?></div>
                                 </div>
                             </div>
                         <?php endforeach; ?>
@@ -462,29 +749,25 @@ require_once 'templates/head.php';
             <div data-bs-dismiss="offcanvas" class="shadow-sm" style="cursor: pointer; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; border-radius: 14px; border: 1px solid var(--border-light); background: var(--bg-surface); transition: background 0.2s;"><i class="fas fa-arrow-right"></i></div>
             <div class="text-end">
                 <div style="font-weight: 700; font-size: 1.1rem;">Portfolio Analytics</div>
-                <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;"><i class="fas fa-chart-line text-accent me-1"></i> This Week</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;"><i class="fas fa-chart-line text-accent me-1"></i> Flow Snapshot</div>
             </div>
         </div>
         <div class="chat-body d-flex flex-column" style="padding: 1.5rem 1rem 6rem 1rem; overflow-y: auto;">
             
             <div class="swap-input-box mb-4 text-center" style="background: var(--bg-surface-light); border: 2px solid transparent; border-radius: 24px; padding: 2rem 1.5rem; transition: border-color 0.2s;">
-                <div style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Total Performance</div>
-                <div style="font-weight: 700; font-size: 2.5rem; font-family: 'Outfit'; color: var(--text-primary);">+ £450.20</div>
-                <div style="font-size: 1.1rem; color: #10b981; font-weight: 600; margin-top: 5px;"><i class="fas fa-arrow-up me-1"></i>3.8%</div>
+                <div style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">7-Day Net Flow (GBP)</div>
+                <div id="analyticsModalNet" style="font-weight: 700; font-size: 2.5rem; font-family: 'Outfit'; color: var(--text-primary);"><?php echo htmlspecialchars($weekNetSign, ENT_QUOTES, 'UTF-8'); ?> £<?php echo htmlspecialchars(number_format(abs($weekNet), 2), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div id="analyticsModalPercent" style="font-size: 1.1rem; font-weight: 600; margin-top: 5px;" class="<?php echo htmlspecialchars($weeklyChangeClass, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars(number_format($weeklyChangePercent, 1), ENT_QUOTES, 'UTF-8'); ?>%</div>
                 
                 <div style="position: relative; height: 100px; width: 100%; display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: 2rem; opacity: 0.9;">
-                    <div style="width: 14%; background: var(--text-secondary); height: 30%; border-radius: 6px; opacity: 0.4;"></div>
-                    <div style="width: 14%; background: var(--text-secondary); height: 45%; border-radius: 6px; opacity: 0.4;"></div>
-                    <div style="width: 14%; background: var(--text-secondary); height: 20%; border-radius: 6px; opacity: 0.4;"></div>
-                    <div style="width: 14%; background: var(--text-secondary); height: 60%; border-radius: 6px; opacity: 0.4;"></div>
-                    <div style="width: 14%; background: var(--text-secondary); height: 50%; border-radius: 6px; opacity: 0.4;"></div>
-                    <div style="width: 14%; background: var(--accent); height: 85%; border-radius: 6px; box-shadow: 0 0 10px var(--accent-glow);"></div>
-                    <div style="width: 14%; background: var(--accent); height: 100%; border-radius: 6px; box-shadow: 0 0 20px var(--accent-glow);"></div>
+                    <?php foreach ($dailyBars as $bar): ?>
+                        <div style="width: 14%; background: <?php echo $bar['positive'] ? 'var(--accent)' : '#ef4444'; ?>; height: <?php echo htmlspecialchars((string)$bar['height'], ENT_QUOTES, 'UTF-8'); ?>%; border-radius: 6px; <?php echo $bar['positive'] ? 'box-shadow: 0 0 10px var(--accent-glow);' : 'opacity: 0.9;'; ?>"></div>
+                    <?php endforeach; ?>
                 </div>
             </div>
 
             <div class="d-flex justify-content-between align-items-center mb-3 px-2">
-                <h3 class="section-heading mb-0" style="font-size: 1.1rem;">Asset Allocation</h3>
+                <h3 class="section-heading mb-0" style="font-size: 1.1rem;">Movement Breakdown</h3>
                 <div style="font-size: 0.8rem; color: var(--text-secondary);"><i class="fas fa-pie-chart text-secondary"></i></div>
             </div>
 
@@ -492,23 +775,51 @@ require_once 'templates/head.php';
                 
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <div class="d-flex align-items-center">
-                        <div style="width: 12px; height: 12px; border-radius: 50%; background: #f59e0b; margin-right: 12px;"></div>
-                        <div style="font-weight: 600; font-size: 1rem; color: var(--text-primary);">Bitcoin</div>
+                        <div style="width: 12px; height: 12px; border-radius: 50%; background: #10b981; margin-right: 12px;"></div>
+                        <div style="font-weight: 600; font-size: 1rem; color: var(--text-primary);">Deposits (30d)</div>
                     </div>
-                    <div style="font-weight: 700; font-size: 1.05rem; font-family: 'Outfit'; color: var(--text-primary);">66%</div>
+                    <div id="analyticsDeposits30d" style="font-weight: 700; font-size: 1.05rem; font-family: 'Outfit'; color: var(--text-primary);">£<?php echo htmlspecialchars(number_format($monthDeposits, 2), ENT_QUOTES, 'UTF-8'); ?></div>
                 </div>
                 
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <div class="d-flex align-items-center">
-                        <div style="width: 12px; height: 12px; border-radius: 50%; background: #3b82f6; margin-right: 12px;"></div>
-                        <div style="font-weight: 600; font-size: 1rem; color: var(--text-primary);">British Pound</div>
+                        <div style="width: 12px; height: 12px; border-radius: 50%; background: #ef4444; margin-right: 12px;"></div>
+                        <div style="font-weight: 600; font-size: 1rem; color: var(--text-primary);">Withdrawals (30d)</div>
                     </div>
-                    <div style="font-weight: 700; font-size: 1.05rem; font-family: 'Outfit'; color: var(--text-primary);">34%</div>
+                    <div id="analyticsWithdrawals30d" style="font-weight: 700; font-size: 1.05rem; font-family: 'Outfit'; color: var(--text-primary);">£<?php echo htmlspecialchars(number_format($monthWithdrawals, 2), ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="d-flex align-items-center">
+                        <div style="width: 12px; height: 12px; border-radius: 50%; background: #3b82f6; margin-right: 12px;"></div>
+                        <div style="font-weight: 600; font-size: 1rem; color: var(--text-primary);">Pending Transfers</div>
+                    </div>
+                    <div id="analyticsPendingCount" style="font-weight: 700; font-size: 1.05rem; font-family: 'Outfit'; color: var(--text-primary);"><?php echo htmlspecialchars((string)$analyticsPendingCount, ENT_QUOTES, 'UTF-8'); ?></div>
                 </div>
 
                 <div class="progress mt-4" style="height: 12px; border-radius: 100px; background: rgba(255,255,255,0.05);">
-                    <div class="progress-bar" role="progressbar" style="width: 66%; background: #f59e0b; border-radius: 100px;"></div>
-                    <div class="progress-bar" role="progressbar" style="width: 34%; background: #3b82f6; border-radius: 100px;"></div>
+                    <?php
+                        $flowTotal = max(1.0, $monthDeposits + $monthWithdrawals);
+                        $depWidth = ($monthDeposits / $flowTotal) * 100;
+                        $wdrWidth = ($monthWithdrawals / $flowTotal) * 100;
+                    ?>
+                    <div id="analyticsDepProgress" class="progress-bar" role="progressbar" style="width: <?php echo htmlspecialchars(number_format($depWidth, 2), ENT_QUOTES, 'UTF-8'); ?>%; background: #10b981; border-radius: 100px;"></div>
+                    <div id="analyticsWdrProgress" class="progress-bar" role="progressbar" style="width: <?php echo htmlspecialchars(number_format($wdrWidth, 2), ENT_QUOTES, 'UTF-8'); ?>%; background: #ef4444; border-radius: 100px;"></div>
+                </div>
+            </div>
+
+            <div class="swap-input-box mb-4" style="background: var(--bg-surface-light); border: 2px solid transparent; border-radius: 24px; padding: 1.25rem 1.5rem;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div style="font-weight: 600; color: var(--text-secondary);">Completed Deposits</div>
+                    <div id="analyticsDepositCount" style="font-weight: 700; font-family: 'Outfit'; color: var(--text-primary);"><?php echo htmlspecialchars((string)$analyticsDepositCount, ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div style="font-weight: 600; color: var(--text-secondary);">Completed Withdrawals</div>
+                    <div id="analyticsWithdrawalCount" style="font-weight: 700; font-family: 'Outfit'; color: var(--text-primary);"><?php echo htmlspecialchars((string)$analyticsWithdrawalCount, ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mt-3 pt-2" style="border-top: 1px solid var(--border-light);">
+                    <div style="font-weight: 600; color: var(--text-secondary);">30-Day Net</div>
+                    <div id="analyticsMonthNet" class="<?php echo $monthNet < 0 ? 'text-danger' : 'text-success'; ?>" style="font-weight: 700; font-family: 'Outfit';"><?php echo $monthNet < 0 ? '-' : '+'; ?>£<?php echo htmlspecialchars(number_format(abs($monthNet), 2), ENT_QUOTES, 'UTF-8'); ?></div>
                 </div>
             </div>
 
@@ -983,6 +1294,9 @@ require_once 'templates/head.php';
             if (iconClass.includes('fa-university')) {
                 return { bg: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6' };
             }
+            if (iconClass.includes('fa-paper-plane') || iconClass.includes('fa-money-check') || iconClass.includes('fa-arrow-up')) {
+                return { bg: 'rgba(239, 68, 68, 0.12)', color: '#ef4444' };
+            }
             if (iconClass.includes('fa-credit-card')) {
                 return { bg: 'rgba(16, 185, 129, 0.12)', color: '#10b981' };
             }
@@ -1004,6 +1318,7 @@ require_once 'templates/head.php';
             row.dataset.activityMethod = activity.method || 'n/a';
             row.dataset.activityIcon = activity.icon_class || 'fas fa-arrow-down';
             row.dataset.activityAmount = activity.amount || '0.00';
+            row.dataset.activityFlow = activity.flow || ((String(activity.activity_type || '').toLowerCase() === 'withdrawal') ? 'out' : 'in');
             row.dataset.activityCurrency = activity.currency || 'GBP';
             row.dataset.activityCreated = activity.created_label || 'N/A';
             row.dataset.activityCompleted = activity.completed_label || 'N/A';
@@ -1012,6 +1327,9 @@ require_once 'templates/head.php';
             const iconTone = getIconTone(row.dataset.activityIcon);
             const statusColor = getStatusColor(row.dataset.activityStatus);
             const statusLabel = normalizeStatusLabel(row.dataset.activityStatus);
+            const isOutflow = String(row.dataset.activityFlow || '').toLowerCase() === 'out';
+            const amountPrefix = isOutflow ? '-' : '+';
+            const amountClass = isOutflow ? 'text-danger' : 'text-success';
 
             row.innerHTML = `
                 <div class="asset-icon" style="background: ${iconTone.bg}; color: ${iconTone.color}; width: 40px; height: 40px; font-size: 1.1rem;"><i class="${row.dataset.activityIcon}"></i></div>
@@ -1020,7 +1338,7 @@ require_once 'templates/head.php';
                     <div class="asset-sub">${activity.time_label || 'Recently'} • <span style="color: ${statusColor}; font-weight: 600;">${statusLabel}</span></div>
                 </div>
                 <div class="asset-value">
-                    <div class="asset-price text-success" style="font-size: 0.95rem;">+ ${row.dataset.activityCurrency} ${row.dataset.activityAmount}</div>
+                    <div class="asset-price ${amountClass}" style="font-size: 0.95rem;">${amountPrefix} ${row.dataset.activityCurrency} ${row.dataset.activityAmount}</div>
                 </div>
             `;
 
@@ -1039,12 +1357,16 @@ require_once 'templates/head.php';
             row.dataset.activityMethod = activity.method || 'n/a';
             row.dataset.activityIcon = activity.icon_class || 'fas fa-arrow-down';
             row.dataset.activityAmount = activity.amount || '0.00';
+            row.dataset.activityFlow = activity.flow || ((String(activity.activity_type || '').toLowerCase() === 'withdrawal') ? 'out' : 'in');
             row.dataset.activityCurrency = activity.currency || 'GBP';
             row.dataset.activityCreated = activity.created_label || 'N/A';
             row.dataset.activityCompleted = activity.completed_label || 'N/A';
             row.dataset.activityId = activity.activity_id || 'n/a';
 
             const iconTone = getIconTone(row.dataset.activityIcon);
+            const isOutflow = String(row.dataset.activityFlow || '').toLowerCase() === 'out';
+            const amountPrefix = isOutflow ? '-' : '+';
+            const amountClass = isOutflow ? 'text-danger' : 'text-success';
 
             row.innerHTML = `
                 <div class="asset-icon" style="background: ${iconTone.bg}; color: ${iconTone.color}; width: 40px; height: 40px; font-size: 1.1rem;"><i class="${row.dataset.activityIcon}"></i></div>
@@ -1053,7 +1375,7 @@ require_once 'templates/head.php';
                     <div class="asset-sub">${activity.time_label || 'Recently'} • ${activity.status_sub || normalizeStatusLabel(row.dataset.activityStatus)}</div>
                 </div>
                 <div class="asset-value">
-                    <div class="asset-price text-success" style="font-size: 0.95rem;">+ ${row.dataset.activityCurrency} ${row.dataset.activityAmount}</div>
+                    <div class="asset-price ${amountClass}" style="font-size: 0.95rem;">${amountPrefix} ${row.dataset.activityCurrency} ${row.dataset.activityAmount}</div>
                 </div>
             `;
 
@@ -1102,6 +1424,121 @@ require_once 'templates/head.php';
             }).join('~');
         }
 
+        function computeAnalyticsFromActivities(items) {
+            const data = {
+                weekDeposits: 0,
+                weekWithdrawals: 0,
+                monthDeposits: 0,
+                monthWithdrawals: 0,
+                monthNet: 0,
+                pendingCount: 0,
+                completedDeposits: 0,
+                completedWithdrawals: 0,
+                weekNet: 0,
+                weekPct: 0
+            };
+
+            const now = Date.now();
+            const weekAgo = now - (7 * 24 * 60 * 60 * 1000);
+            const monthAgo = now - (30 * 24 * 60 * 60 * 1000);
+
+            (Array.isArray(items) ? items : []).forEach((item) => {
+                const rawStatus = String(item.status_raw || '').toLowerCase();
+                const isCompleted = rawStatus.includes('complete') || rawStatus.includes('settled') || rawStatus.includes('success') || rawStatus.includes('approved');
+                const isPending = rawStatus.includes('pending');
+                const isWithdrawal = String(item.flow || '').toLowerCase() === 'out' || String(item.activity_type || '').toLowerCase() === 'withdrawal';
+                const currency = String(item.currency || '').toUpperCase();
+                const amount = Math.abs(parseFloat(item.amount || '0') || 0);
+
+                if (isPending) {
+                    data.pendingCount += 1;
+                }
+
+                if (!isCompleted || currency !== 'GBP') {
+                    return;
+                }
+
+                if (isWithdrawal) {
+                    data.completedWithdrawals += 1;
+                } else {
+                    data.completedDeposits += 1;
+                }
+
+                const createdMs = Date.parse(item.created_label || '') || Date.now();
+
+                if (createdMs >= weekAgo) {
+                    if (isWithdrawal) {
+                        data.weekWithdrawals += amount;
+                    } else {
+                        data.weekDeposits += amount;
+                    }
+                }
+
+                if (createdMs >= monthAgo) {
+                    if (isWithdrawal) {
+                        data.monthWithdrawals += amount;
+                    } else {
+                        data.monthDeposits += amount;
+                    }
+                }
+            });
+
+            data.weekNet = data.weekDeposits - data.weekWithdrawals;
+            data.monthNet = data.monthDeposits - data.monthWithdrawals;
+            const ref = Math.max(1, data.weekDeposits + data.weekWithdrawals);
+            data.weekPct = (data.weekNet / ref) * 100;
+            return data;
+        }
+
+        function applyRealtimeAnalytics(analytics) {
+            if (!analytics || typeof analytics !== 'object') {
+                return;
+            }
+
+            const weekNetSign = analytics.weekNet < 0 ? '-' : '+';
+            const weekNetClass = analytics.weekNet < 0 ? 'text-danger' : 'text-success';
+            const monthNetSign = analytics.monthNet < 0 ? '-' : '+';
+
+            const summaryEl = document.getElementById('analyticsSummaryValue');
+            const modalNetEl = document.getElementById('analyticsModalNet');
+            const modalPctEl = document.getElementById('analyticsModalPercent');
+            const dep30El = document.getElementById('analyticsDeposits30d');
+            const wdr30El = document.getElementById('analyticsWithdrawals30d');
+            const pendingEl = document.getElementById('analyticsPendingCount');
+            const depCountEl = document.getElementById('analyticsDepositCount');
+            const wdrCountEl = document.getElementById('analyticsWithdrawalCount');
+            const monthNetEl = document.getElementById('analyticsMonthNet');
+            const depProgressEl = document.getElementById('analyticsDepProgress');
+            const wdrProgressEl = document.getElementById('analyticsWdrProgress');
+
+            const weekNetText = `${weekNetSign} £${Math.abs(analytics.weekNet).toFixed(2)}`;
+            const pctText = `(${analytics.weekPct.toFixed(1)}%)`;
+
+            if (summaryEl) {
+                summaryEl.innerHTML = `${weekNetText} <span class="${weekNetClass}" style="font-size: 1rem;">${pctText}</span>`;
+            }
+            if (modalNetEl) {
+                modalNetEl.textContent = weekNetText;
+            }
+            if (modalPctEl) {
+                modalPctEl.textContent = `${analytics.weekPct.toFixed(1)}%`;
+                modalPctEl.className = weekNetClass;
+            }
+            if (dep30El) dep30El.textContent = `£${analytics.monthDeposits.toFixed(2)}`;
+            if (wdr30El) wdr30El.textContent = `£${analytics.monthWithdrawals.toFixed(2)}`;
+            if (pendingEl) pendingEl.textContent = String(analytics.pendingCount || 0);
+            if (depCountEl) depCountEl.textContent = String(analytics.completedDeposits || 0);
+            if (wdrCountEl) wdrCountEl.textContent = String(analytics.completedWithdrawals || 0);
+            if (monthNetEl) {
+                monthNetEl.textContent = `${monthNetSign}£${Math.abs(analytics.monthNet).toFixed(2)}`;
+                monthNetEl.className = analytics.monthNet < 0 ? 'text-danger' : 'text-success';
+            }
+
+            const totalFlow = Math.max(1, analytics.monthDeposits + analytics.monthWithdrawals);
+            if (depProgressEl) depProgressEl.style.width = `${(analytics.monthDeposits / totalFlow) * 100}%`;
+            if (wdrProgressEl) wdrProgressEl.style.width = `${(analytics.monthWithdrawals / totalFlow) * 100}%`;
+        }
+
             function applyRealtimeBalance(balance) {
                 if (!balance || typeof balance !== 'object') {
                     return;
@@ -1138,6 +1575,7 @@ require_once 'templates/head.php';
                 ALL_ACTIVITIES = nextAll;
                 renderRecentActivityList(nextRecent);
                 applyRealtimeBalance(nextBalance);
+                applyRealtimeAnalytics(computeAnalyticsFromActivities(nextAll));
 
                 const allActivityModalEl = document.getElementById('allActivityModal');
                 if (allActivityModalEl && allActivityModalEl.classList.contains('show')) {
@@ -1384,9 +1822,11 @@ require_once 'templates/head.php';
                     document.getElementById('activityDetailsMethod').textContent = trigger.getAttribute('data-activity-method') || 'N/A';
 
                     const amount = trigger.getAttribute('data-activity-amount') || '0.00';
+                    const flow = String(trigger.getAttribute('data-activity-flow') || '').toLowerCase();
+                    const isOutflow = flow === 'out' || String(trigger.getAttribute('data-activity-type') || '').toLowerCase() === 'withdrawal';
                     const currency = trigger.getAttribute('data-activity-currency') || 'GBP';
                     const amountEl = document.getElementById('activityDetailsAmount');
-                    amountEl.textContent = `+ ${currency} ${amount}`;
+                    amountEl.textContent = `${isOutflow ? '-' : '+'} ${currency} ${amount}`;
                     amountEl.style.color = amountTone;
                     const amountSubEl = document.getElementById('activityDetailsAmountSub');
                     if (amountSubEl) {
@@ -1426,6 +1866,7 @@ require_once 'templates/head.php';
         }
 
         updateDepositButton();
+        applyRealtimeAnalytics(computeAnalyticsFromActivities(ALL_ACTIVITIES));
         startActivityRealtimePolling();
 
         window.addEventListener('beforeunload', function () {

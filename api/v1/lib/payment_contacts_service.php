@@ -2,6 +2,8 @@
 
 require_once __DIR__ . '/../../../includes/available_balance.php';
 
+const PAYMENT_CONTACTS_MAX_RECIPIENT_NAME_LENGTH = 80;
+
 function payment_contacts_ensure_schema(mysqli $dbc): void
 {
     mysqli_query($dbc, "CREATE TABLE IF NOT EXISTS payment_contacts (
@@ -81,11 +83,11 @@ function payment_contacts_create(mysqli $dbc, int $userId, string $recipientName
     $sortCode = payment_contacts_normalize_sort_code($sortCodeRaw);
     $accountNumber = payment_contacts_normalize_account_number($accountNumberRaw);
 
-    if ($name === '' || mb_strlen($name) > 120) {
+    if ($name === '' || mb_strlen($name) > PAYMENT_CONTACTS_MAX_RECIPIENT_NAME_LENGTH) {
         return [
             'ok' => false,
             'code' => 'invalid_recipient_name',
-            'message' => 'Enter a valid recipient name.',
+            'message' => 'Recipient name must be between 1 and ' . PAYMENT_CONTACTS_MAX_RECIPIENT_NAME_LENGTH . ' characters.',
         ];
     }
 
@@ -188,11 +190,11 @@ function payment_contacts_update(mysqli $dbc, int $userId, int $contactId, strin
     $sortCode = payment_contacts_normalize_sort_code($sortCodeRaw);
     $accountNumber = payment_contacts_normalize_account_number($accountNumberRaw);
 
-    if ($name === '' || mb_strlen($name) > 120) {
+    if ($name === '' || mb_strlen($name) > PAYMENT_CONTACTS_MAX_RECIPIENT_NAME_LENGTH) {
         return [
             'ok' => false,
             'code' => 'invalid_recipient_name',
-            'message' => 'Enter a valid recipient name.',
+            'message' => 'Recipient name must be between 1 and ' . PAYMENT_CONTACTS_MAX_RECIPIENT_NAME_LENGTH . ' characters.',
         ];
     }
 

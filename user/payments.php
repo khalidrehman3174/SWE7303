@@ -16,6 +16,7 @@ $contactMessageType = 'success';
 $formRecipientName = '';
 $formSortCode = '';
 $formAccountNumber = '';
+$recipientNameMaxLength = 80;
 
 mysqli_query($dbc, "CREATE TABLE IF NOT EXISTS payment_contacts (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -374,7 +375,8 @@ require_once 'templates/head.php';
                     <form method="POST" action="" id="newPaymentForm" novalidate>
                     <div class="mb-3">
                         <label class="form-label text-secondary" style="font-size: 0.85rem; font-weight: 500;">Recipient Name</label>
-                        <input type="text" name="recipient_name" value="<?php echo htmlspecialchars($formRecipientName, ENT_QUOTES, 'UTF-8'); ?>" class="form-control" placeholder="e.g. John Doe" maxlength="120" required style="background: var(--list-bg); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px; color: var(--text-primary); font-family: 'Outfit', sans-serif;">
+                        <input type="text" name="recipient_name" value="<?php echo htmlspecialchars($formRecipientName, ENT_QUOTES, 'UTF-8'); ?>" class="form-control" placeholder="e.g. John Doe" maxlength="<?php echo (int)$recipientNameMaxLength; ?>" required style="background: var(--list-bg); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px; color: var(--text-primary); font-family: 'Outfit', sans-serif;">
+                        <div class="text-secondary" style="font-size: 0.75rem; margin-top: 6px;">Maximum <?php echo (int)$recipientNameMaxLength; ?> characters.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label text-secondary" style="font-size: 0.85rem; font-weight: 500;">Sort Code</label>
@@ -404,7 +406,8 @@ require_once 'templates/head.php';
                     <input type="hidden" name="contact_id" id="editContactId" value="0">
                     <div class="mb-3">
                         <label class="form-label text-secondary" style="font-size: 0.85rem; font-weight: 500;">Recipient Name</label>
-                        <input type="text" id="editRecipientName" name="recipient_name" class="form-control" placeholder="e.g. John Doe" maxlength="120" required style="background: var(--list-bg); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px; color: var(--text-primary); font-family: 'Outfit', sans-serif;">
+                        <input type="text" id="editRecipientName" name="recipient_name" class="form-control" placeholder="e.g. John Doe" maxlength="<?php echo (int)$recipientNameMaxLength; ?>" required style="background: var(--list-bg); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px; color: var(--text-primary); font-family: 'Outfit', sans-serif;">
+                        <div class="text-secondary" style="font-size: 0.75rem; margin-top: 6px;">Maximum <?php echo (int)$recipientNameMaxLength; ?> characters.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label text-secondary" style="font-size: 0.85rem; font-weight: 500;">Sort Code</label>
