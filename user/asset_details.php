@@ -52,8 +52,7 @@ $amountDisplay = number_format($amount, $asset === 'GBP' ? 2 : 6);
 
 $assetNetworks = [
     'BTC' => [
-        ['id' => 'bitcoin', 'name' => 'Bitcoin', 'tag' => 'Native', 'eta' => '10-30 mins'],
-        ['id' => 'lightning', 'name' => 'Lightning', 'tag' => 'Layer 2', 'eta' => '< 2 mins'],
+        ['id' => 'bitcoin', 'name' => 'Bitcoin Testnet', 'tag' => 'Active', 'eta' => '10-30 mins'],
     ],
     'ETH' => [
         ['id' => 'ethereum', 'name' => 'Ethereum', 'tag' => 'ERC-20', 'eta' => '2-8 mins'],
@@ -827,6 +826,37 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 return (networkId.substring(0, 3).toUpperCase() + '1' + body.substring(0, 33));
             }
 
+            async function resolveDepositAddress(symbol, networkId) {
+                var safeSymbol = String(symbol || '').toUpperCase();
+                if (safeSymbol !== 'BTC') {
+                    return makeDepositAddress(safeSymbol, networkId);
+                }
+
+                var endpoint = '../api/v1/crypto/btc_deposit_address.php?asset=' + encodeURIComponent(safeSymbol) + '&network=' + encodeURIComponent(networkId || 'bitcoin');
+                var response = await fetch(endpoint, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+
+                var raw = await response.text();
+                var payload;
+                try {
+                    payload = JSON.parse(raw);
+                } catch (e) {
+                    throw new Error('Deposit address API returned invalid JSON');
+                }
+
+                if (!response.ok || !payload || payload.success !== true || !payload.data || !payload.data.address || !payload.data.address.address) {
+                    var msg = payload && payload.message ? payload.message : 'Could not generate BTC deposit address';
+                    throw new Error(msg);
+                }
+
+                return String(payload.data.address.address);
+            }
+
             function initTransferModals() {
                 var cfg = window.assetTransferConfig || null;
                 if (!cfg || !Array.isArray(cfg.networks) || cfg.networks.length === 0) {
@@ -987,15 +1017,37 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                             depositDontShowAgain,
                             function (nextStep) { depositWarningAfterConfirm = nextStep; },
                             function () {
-                            var address = makeDepositAddress(cfg.asset, selectedDepositNetwork.id);
                             if (depositStep1) depositStep1.classList.add('d-none');
                             if (depositStep2) depositStep2.classList.remove('d-none');
                             if (depositStepBadge) depositStepBadge.textContent = 'Step 2/2';
                             if (depositNetworkMeta) depositNetworkMeta.textContent = selectedDepositNetwork.name + ' • ' + selectedDepositNetwork.tag;
-                            if (depositAddressEl) depositAddressEl.textContent = address;
+                            if (depositAddressEl) depositAddressEl.textContent = 'Generating address...';
                             if (depositQrImage) {
-                                depositQrImage.src = 'https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=' + encodeURIComponent(address);
+                                depositQrImage.removeAttribute('src');
                             }
+
+                            resolveDepositAddress(cfg.asset, selectedDepositNetwork.id)
+                                .then(function (address) {
+                                    if (depositAddressEl) depositAddressEl.textContent = address;
+                                    if (depositQrImage) {
+                                        depositQrImage.src = 'https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=' + encodeURIComponent(address);
+                                    }
+                                })
+                                .catch(function (error) {
+                                    var errMsg = (error && error.message) ? String(error.message) : 'Try again.';
+                                    if (errMsg.length > 120) {
+                                        errMsg = errMsg.substring(0, 120) + '...';
+                                    }
+                                    if (depositAddressEl) depositAddressEl.textContent = 'Address generation failed: ' + errMsg;
+                                    if (depositNetworkMeta) depositNetworkMeta.textContent = (selectedDepositNetwork.name + ' • ' + selectedDepositNetwork.tag + ' • Error');
+                                    if (copyBtn) {
+                                        copyBtn.innerHTML = '<i class="fas fa-exclamation-circle"></i> Retry';
+                                        setTimeout(function () {
+                                            copyBtn.innerHTML = '<i class="fas fa-copy"></i> Copy Address';
+                                        }, 1800);
+                                    }
+                                    console.error(error);
+                                });
                             }
                         );
                     });

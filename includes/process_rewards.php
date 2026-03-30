@@ -2,7 +2,25 @@
 // includes/process_rewards.php
 // Included by init.php to lazily process staking rewards on page load.
 
+function process_rewards_table_exists(mysqli $dbc, string $tableName): bool
+{
+    try {
+        $safe = mysqli_real_escape_string($dbc, $tableName);
+        $res = mysqli_query($dbc, "SHOW TABLES LIKE '$safe'");
+        return ($res instanceof mysqli_result) && mysqli_num_rows($res) > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
 if (isset($user_id) && $user_id) {
+    $requiredTables = ['user_stakes', 'staking_plans', 'wallets', 'transactions'];
+    foreach ($requiredTables as $tableName) {
+        if (!process_rewards_table_exists($dbc, $tableName)) {
+            return;
+        }
+    }
+
     // Check for due payouts
     $q_due = "SELECT s.*, p.apy, p.asset_symbol, p.name as plan_name 
               FROM user_stakes s 

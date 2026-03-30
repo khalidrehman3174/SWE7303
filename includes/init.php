@@ -124,8 +124,10 @@ function require_login() {
 $settings = [];
 if (isset($dbc)) {
     $set_q = mysqli_query($dbc, "SELECT * FROM settings");
-    while ($row = mysqli_fetch_assoc($set_q)) {
-        $settings[$row['key_name']] = $row['value'];
+    if ($set_q instanceof mysqli_result) {
+        while ($row = mysqli_fetch_assoc($set_q)) {
+            $settings[$row['key_name']] = $row['value'];
+        }
     }
 }
 

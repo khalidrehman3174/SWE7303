@@ -13,10 +13,18 @@ function api_config(): array
         'default_currency' => 'GBP',
         'default_wallet_symbol' => 'GBP',
         'max_deposit_amount' => 100000,
+        'btc_network' => strtolower((string)(getenv('BTC_NETWORK') ?: 'testnet')),
+        'btc_xpub' => (string)(getenv('BTC_XPUB') ?: ''),
+        'btc_required_confirmations' => (int)(getenv('BTC_REQUIRED_CONFIRMATIONS') ?: 2),
+        'btc_indexer_base_url' => (string)(getenv('BTC_INDEXER_BASE_URL') ?: ''),
+        'btc_watcher_max_blocks_per_run' => (int)(getenv('BTC_WATCHER_MAX_BLOCKS_PER_RUN') ?: 20),
+        'btc_watcher_http_timeout_seconds' => (int)(getenv('BTC_WATCHER_HTTP_TIMEOUT_SECONDS') ?: 12),
     ];
 
     // In production, only environment variables should be used.
     if ($appEnv !== 'production') {
+        
+
         $localConfigFile = __DIR__ . '/config.local.php';
         if (is_file($localConfigFile)) {
             $localConfig = require $localConfigFile;

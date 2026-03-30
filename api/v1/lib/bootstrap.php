@@ -18,8 +18,12 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 require_once __DIR__ . '/response.php';
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/deposit_repo.php';
+require_once __DIR__ . '/crypto_btc_repo.php';
+require_once __DIR__ . '/crypto_btc_watcher_repo.php';
 require_once __DIR__ . '/stripe_provider.php';
 require_once __DIR__ . '/deposit_service.php';
+require_once __DIR__ . '/crypto_btc_service.php';
+require_once __DIR__ . '/crypto_btc_watcher_service.php';
 
 $apiConfig = api_config();
 if (!empty($apiConfig['api_allowed_origin'])) {
@@ -66,3 +70,5 @@ function api_get_idempotency_key(): string
 }
 
 deposit_repo_ensure_schema($dbc);
+crypto_btc_repo_ensure_schema($dbc);
+crypto_btc_watcher_repo_ensure_schema($dbc);
