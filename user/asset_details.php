@@ -50,6 +50,261 @@ if ($asset === 'GBP') {
 
 $amountDisplay = number_format($amount, $asset === 'GBP' ? 2 : 6);
 
+function asset_details_table_exists(mysqli $dbc, string $table): bool
+{
+    $safe = trim($table);
+    if ($safe === '' || !preg_match('/^[a-zA-Z0-9_]+$/', $safe)) {
+        return false;
+    }
+
+    $stmt = mysqli_prepare(
+        $dbc,
+        'SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1'
+    );
+    if (!$stmt) {
+        return false;
+    }
+
+    mysqli_stmt_bind_param($stmt, 's', $safe);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    $exists = $result ? (mysqli_fetch_row($result) !== null) : false;
+    mysqli_stmt_close($stmt);
+
+    return $exists;
+}
+
+function asset_details_table_columns(mysqli $dbc, string $table): array
+{
+    $safe = trim($table);
+    if ($safe === '' || !preg_match('/^[a-zA-Z0-9_]+$/', $safe)) {
+        return [];
+    }
+
+    $columns = [];
+    $query = 'SHOW COLUMNS FROM `' . $safe . '`';
+    $result = mysqli_query($dbc, $query);
+    if (!$result) {
+        return [];
+    }
+
+    while ($row = mysqli_fetch_assoc($result)) {
+        $field = (string)($row['Field'] ?? '');
+        if ($field !== '') {
+            $columns[] = $field;
+        }
+    }
+
+    return $columns;
+}
+
+function asset_details_first_existing_column(array $columns, array $candidates): ?string
+{
+    foreach ($candidates as $candidate) {
+        if (in_array($candidate, $columns, true)) {
+            return $candidate;
+        }
+    }
+
+    return null;
+}
+
+function asset_details_fetch_activity_seed(mysqli $dbc, int $userId, string $asset, int $limit = 24): array
+{
+    $out = [
+        'alerts' => [],
+        'history' => [],
+    ];
+
+    if (!asset_details_table_exists($dbc, 'transactions')) {
+        return $out;
+    }
+
+    $columns = asset_details_table_columns($dbc, 'transactions');
+    if (empty($columns)) {
+        return $out;
+    }
+
+    $userCol = asset_details_first_existing_column($columns, ['user_id']);
+    $symbolCol = asset_details_first_existing_column($columns, ['symbol', 'asset', 'currency']);
+    $typeCol = asset_details_first_existing_column($columns, ['type', 'transaction_type', 'category']);
+    $amountCol = asset_details_first_existing_column($columns, ['amount', 'net_amount']);
+    $statusCol = asset_details_first_existing_column($columns, ['status', 'state']);
+    $descriptionCol = asset_details_first_existing_column($columns, ['description', 'note', 'narration']);
+    $createdCol = asset_details_first_existing_column($columns, ['created_at', 'updated_at', 'timestamp']);
+    $idCol = asset_details_first_existing_column($columns, ['id', 'transaction_id']);
+
+    if ($userCol === null || $symbolCol === null || $typeCol === null || $amountCol === null || $statusCol === null || $descriptionCol === null) {
+        return $out;
+    }
+
+    $orderCol = $createdCol !== null ? $createdCol : ($idCol !== null ? $idCol : null);
+    if ($orderCol === null) {
+        return $out;
+    }
+
+    $sql = 'SELECT * FROM `transactions` WHERE ' . $userCol . ' = ? AND UPPER(' . $symbolCol . ') = ? ORDER BY ' . $orderCol . ' DESC LIMIT ?';
+    $stmt = mysqli_prepare($dbc, $sql);
+    if (!$stmt) {
+        return $out;
+    }
+
+    $assetUpper = strtoupper($asset);
+    mysqli_stmt_bind_param($stmt, 'isi', $userId, $assetUpper, $limit);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    if ($result) {
+        while ($row = mysqli_fetch_assoc($result)) {
+            $type = strtolower(trim((string)($row[$typeCol] ?? 'activity')));
+            $status = strtolower(trim((string)($row[$statusCol] ?? 'pending')));
+            $amountRaw = (float)($row[$amountCol] ?? 0.0);
+            $amountAbs = abs($amountRaw);
+            $amountPrecision = strtoupper($assetUpper) === 'GBP' ? 2 : 6;
+            $amountDisplay = number_format($amountAbs, $amountPrecision, '.', '');
+            $description = trim((string)($row[$descriptionCol] ?? ''));
+            $createdAt = $createdCol !== null ? trim((string)($row[$createdCol] ?? '')) : '';
+
+            $kind = 'activity';
+            if (strpos($type, 'withdraw') !== false) {
+                $kind = 'withdrawal';
+            } elseif (strpos($type, 'deposit') !== false) {
+                $kind = 'deposit';
+            } elseif (strpos($type, 'reward') !== false) {
+                $kind = 'reward';
+            }
+
+            $title = ucwords(str_replace(['_', '-'], ' ', $type));
+            if ($title === '') {
+                $title = 'Asset Activity';
+            }
+
+            $direction = $amountRaw < 0 ? '-' : '+';
+            $messageParts = [];
+            if ($amountAbs > 0) {
+                $messageParts[] = $direction . $amountDisplay . ' ' . $assetUpper;
+            }
+            if ($description !== '') {
+                $messageParts[] = $description;
+            }
+            $messageParts[] = 'Status: ' . ($status !== '' ? strtoupper($status) : 'PENDING');
+
+            $historyItem = [
+                'kind' => $kind,
+                'title' => $title,
+                'message' => implode(' - ', $messageParts),
+                'ts' => $createdAt !== '' ? $createdAt : date('c'),
+                'details' => [
+                    'source' => 'transactions',
+                    'status' => strtoupper($status !== '' ? $status : 'pending'),
+                    'amount' => ($direction . $amountDisplay . ' ' . $assetUpper),
+                    'method' => $title,
+                    'reference' => '--',
+                    'time' => ($createdAt !== '' ? $createdAt : date('c')),
+                    'asset' => $assetUpper,
+                ],
+            ];
+
+            $out['history'][] = $historyItem;
+
+            if (in_array($status, ['pending', 'processing', 'failed', 'rejected', 'cancelled', 'error'], true)) {
+                $level = in_array($status, ['failed', 'rejected', 'cancelled', 'error'], true) ? 'error' : 'warning';
+                $out['alerts'][] = [
+                    'level' => $level,
+                    'title' => $title,
+                    'message' => implode(' - ', $messageParts),
+                    'ts' => $createdAt !== '' ? $createdAt : date('c'),
+                ];
+            }
+        }
+    }
+
+    mysqli_stmt_close($stmt);
+
+    if (asset_details_table_exists($dbc, 'deposits')) {
+        $depositColumns = asset_details_table_columns($dbc, 'deposits');
+        $depUserCol = asset_details_first_existing_column($depositColumns, ['user_id']);
+        $depSymbolCol = asset_details_first_existing_column($depositColumns, ['currency', 'asset', 'symbol']);
+        $depAmountCol = asset_details_first_existing_column($depositColumns, ['net_amount', 'amount']);
+        $depStatusCol = asset_details_first_existing_column($depositColumns, ['status', 'state']);
+        $depMethodCol = asset_details_first_existing_column($depositColumns, ['method', 'provider', 'channel']);
+        $depRefCol = asset_details_first_existing_column($depositColumns, ['reference', 'deposit_id', 'public_id', 'id']);
+        $depCreatedCol = asset_details_first_existing_column($depositColumns, ['created_at', 'updated_at', 'timestamp']);
+        $depIdCol = asset_details_first_existing_column($depositColumns, ['id', 'deposit_id', 'public_id']);
+
+        if ($depUserCol !== null && $depSymbolCol !== null && $depAmountCol !== null && $depStatusCol !== null) {
+            $depOrderCol = $depCreatedCol !== null ? $depCreatedCol : $depIdCol;
+            if ($depOrderCol !== null) {
+                $depSql = 'SELECT * FROM `deposits` WHERE ' . $depUserCol . ' = ? AND UPPER(' . $depSymbolCol . ') = ? ORDER BY ' . $depOrderCol . ' DESC LIMIT ?';
+                $depStmt = mysqli_prepare($dbc, $depSql);
+
+                if ($depStmt) {
+                    mysqli_stmt_bind_param($depStmt, 'isi', $userId, $assetUpper, $limit);
+                    mysqli_stmt_execute($depStmt);
+                    $depResult = mysqli_stmt_get_result($depStmt);
+
+                    if ($depResult) {
+                        while ($dep = mysqli_fetch_assoc($depResult)) {
+                            $depStatus = strtolower(trim((string)($dep[$depStatusCol] ?? 'pending')));
+                            $depAmountRaw = (float)($dep[$depAmountCol] ?? 0.0);
+                            $depAmountAbs = abs($depAmountRaw);
+                            $depAmountPrecision = strtoupper($assetUpper) === 'GBP' ? 2 : 6;
+                            $depAmountDisplay = number_format($depAmountAbs, $depAmountPrecision, '.', '');
+                            $depCreatedAt = $depCreatedCol !== null ? trim((string)($dep[$depCreatedCol] ?? '')) : '';
+                            $depMethod = $depMethodCol !== null ? trim((string)($dep[$depMethodCol] ?? '')) : '';
+                            $depReference = $depRefCol !== null ? trim((string)($dep[$depRefCol] ?? '')) : '';
+
+                            $depMessageParts = [];
+                            if ($depAmountAbs > 0) {
+                                $depMessageParts[] = '+' . $depAmountDisplay . ' ' . $assetUpper;
+                            }
+                            if ($depMethod !== '') {
+                                $depMessageParts[] = 'Method: ' . $depMethod;
+                            }
+                            if ($depReference !== '') {
+                                $depMessageParts[] = 'Ref: ' . $depReference;
+                            }
+                            $depMessageParts[] = 'Status: ' . strtoupper($depStatus !== '' ? $depStatus : 'pending');
+
+                            $out['history'][] = [
+                                'kind' => 'deposit',
+                                'title' => 'Deposit',
+                                'message' => implode(' - ', $depMessageParts),
+                                'ts' => $depCreatedAt !== '' ? $depCreatedAt : date('c'),
+                                'details' => [
+                                    'source' => 'deposits',
+                                    'status' => strtoupper($depStatus !== '' ? $depStatus : 'pending'),
+                                    'amount' => '+' . $depAmountDisplay . ' ' . $assetUpper,
+                                    'method' => ($depMethod !== '' ? $depMethod : '--'),
+                                    'reference' => ($depReference !== '' ? $depReference : '--'),
+                                    'time' => ($depCreatedAt !== '' ? $depCreatedAt : date('c')),
+                                    'asset' => $assetUpper,
+                                ],
+                            ];
+
+                            if (in_array($depStatus, ['pending', 'processing', 'failed', 'rejected', 'cancelled', 'error'], true)) {
+                                $depLevel = in_array($depStatus, ['failed', 'rejected', 'cancelled', 'error'], true) ? 'error' : 'warning';
+                                $out['alerts'][] = [
+                                    'level' => $depLevel,
+                                    'title' => 'Deposit Update',
+                                    'message' => implode(' - ', $depMessageParts),
+                                    'ts' => $depCreatedAt !== '' ? $depCreatedAt : date('c'),
+                                ];
+                            }
+                        }
+                    }
+
+                    mysqli_stmt_close($depStmt);
+                }
+            }
+        }
+    }
+
+    return $out;
+}
+
+$assetFeedSeed = asset_details_fetch_activity_seed($dbc, $userId, $asset, 24);
+
 $assetNetworks = [
     'BTC' => [
         ['id' => 'bitcoin', 'name' => 'Bitcoin Testnet', 'tag' => 'Active', 'eta' => '10-30 mins'],
@@ -92,8 +347,8 @@ $availableNetworks = $assetNetworks[$asset] ?? [
             <div class="d-none d-lg-flex justify-content-between align-items-center mb-4">
                 <a href="assets.php" class="asset-back-btn"><i class="fas fa-chevron-left"></i><span>Assets</span></a>
                 <div class="d-flex gap-2">
-                    <button class="btn-pro btn-pro-secondary" style="max-width: 170px;"><i class="fas fa-bell"></i> Alerts</button>
-                    <button class="btn-pro btn-pro-primary" style="max-width: 170px;"><i class="fas fa-plus"></i> Add Funds</button>
+                    <button class="btn-pro btn-pro-secondary" style="max-width: 170px;" data-bs-toggle="offcanvas" data-bs-target="#assetHistoryModal" aria-controls="assetHistoryModal"><i class="fas fa-clock-rotate-left"></i> History</button>
+                    <button class="btn-pro btn-pro-primary" style="max-width: 170px;" data-bs-toggle="offcanvas" data-bs-target="#assetAlertsModal" aria-controls="assetAlertsModal"><i class="fas fa-bell"></i> Alerts</button>
                 </div>
             </div>
 
@@ -576,6 +831,77 @@ $availableNetworks = $assetNetworks[$asset] ?? [
             margin-bottom: 0.8rem;
         }
 
+        .withdraw-processing-card {
+            border: 1px solid rgba(59, 130, 246, 0.28);
+            background: linear-gradient(180deg, rgba(239, 246, 255, 0.9) 0%, rgba(248, 250, 252, 0.95) 100%);
+            border-radius: 16px;
+            padding: 0.95rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .withdraw-processing-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.6rem;
+        }
+
+        .withdraw-processing-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+        }
+
+        .withdraw-processing-pill {
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.7px;
+            border-radius: 999px;
+            padding: 5px 8px;
+            border: 1px solid rgba(59, 130, 246, 0.45);
+            color: #1d4ed8;
+            background: rgba(219, 234, 254, 0.8);
+        }
+
+        .withdraw-processing-list {
+            border-top: 1px dashed rgba(59, 130, 246, 0.35);
+            padding-top: 0.7rem;
+            display: grid;
+            gap: 0.55rem;
+        }
+
+        .withdraw-processing-row {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 0.8rem;
+            font-size: 0.82rem;
+        }
+
+        .withdraw-processing-row .k {
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            font-weight: 700;
+            font-size: 0.68rem;
+            min-width: 100px;
+        }
+
+        .withdraw-processing-row .v {
+            color: var(--text-primary);
+            text-align: right;
+            word-break: break-all;
+            font-weight: 600;
+        }
+
+        .withdraw-processing-footnote {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            margin-top: 0.6rem;
+            margin-bottom: 0;
+            line-height: 1.45;
+        }
+
         .asset-back-btn {
             display: inline-flex;
             align-items: center;
@@ -643,6 +969,95 @@ $availableNetworks = $assetNetworks[$asset] ?? [
 
         .transfer-mini-back:hover {
             color: var(--text-primary);
+        }
+
+        .asset-feed-wrap {
+            display: grid;
+            gap: 0.7rem;
+        }
+
+        .asset-feed-empty {
+            border: 1px dashed var(--border-light);
+            border-radius: 14px;
+            padding: 1rem;
+            color: var(--text-secondary);
+            font-size: 0.84rem;
+            text-align: center;
+            background: var(--bg-surface-light);
+        }
+
+        .asset-alert-item,
+        .asset-history-item {
+            border: 1px solid var(--border-light);
+            border-radius: 14px;
+            padding: 0.82rem 0.9rem;
+            background: var(--bg-surface-light);
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+        }
+
+        .asset-alert-head,
+        .asset-history-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.7rem;
+            margin-bottom: 0.36rem;
+        }
+
+        .asset-alert-title,
+        .asset-history-title {
+            font-size: 0.86rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.35;
+        }
+
+        .asset-alert-meta,
+        .asset-history-meta {
+            font-size: 0.73rem;
+            color: var(--text-secondary);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .asset-alert-message,
+        .asset-history-message {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            margin-bottom: 0;
+        }
+
+        .asset-alert-item.is-info {
+            border-color: rgba(37, 99, 235, 0.28);
+            background: linear-gradient(180deg, rgba(239, 246, 255, 0.86) 0%, rgba(248, 250, 252, 0.92) 100%);
+        }
+
+        .asset-alert-item.is-success {
+            border-color: rgba(5, 150, 105, 0.28);
+            background: linear-gradient(180deg, rgba(236, 253, 245, 0.86) 0%, rgba(248, 250, 252, 0.92) 100%);
+        }
+
+        .asset-alert-item.is-warning {
+            border-color: rgba(217, 119, 6, 0.3);
+            background: linear-gradient(180deg, rgba(255, 247, 237, 0.9) 0%, rgba(248, 250, 252, 0.92) 100%);
+        }
+
+        .asset-alert-item.is-error {
+            border-color: rgba(220, 38, 38, 0.24);
+            background: linear-gradient(180deg, rgba(254, 242, 242, 0.88) 0%, rgba(248, 250, 252, 0.93) 100%);
+        }
+
+        .asset-pill {
+            font-size: 0.66rem;
+            letter-spacing: 0.45px;
+            text-transform: uppercase;
+            border-radius: 999px;
+            padding: 4px 7px;
+            font-weight: 800;
+            border: 1px solid var(--border-light);
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.66);
         }
 
         @media (max-width: 768px) {
@@ -730,7 +1145,7 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                     <div style="font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.8px;">Network and transfer</div>
                 </div>
             </div>
-            <span id="withdrawStepBadge" style="font-size: 0.72rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); color: var(--text-secondary);">Step 1/2</span>
+            <span id="withdrawStepBadge" style="font-size: 0.72rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); color: var(--text-secondary);">Step 1/3</span>
         </div>
 
         <div class="chat-body transfer-flow">
@@ -767,6 +1182,40 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 <button id="withdrawReviewBtn" class="btn-pro btn-pro-primary" style="width:100%;"><i class="fas fa-paper-plane"></i> Review Withdrawal</button>
             </section>
 
+            <section id="withdrawStep3" class="transfer-panel d-none">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <div style="font-weight: 700; font-size: 1.08rem;">Processing Request</div>
+                        <div style="font-size: 0.84rem; color: var(--text-secondary);">Submitted to operations queue</div>
+                    </div>
+                    <button id="withdrawReceiptBackBtn" class="transfer-mini-back"><i class="fas fa-chevron-left"></i> Back</button>
+                </div>
+
+                <div class="withdraw-processing-card">
+                    <div class="withdraw-processing-head">
+                        <div class="withdraw-processing-title">Withdrawal Receipt</div>
+                        <span id="withdrawReceiptStatus" class="withdraw-processing-pill">processing</span>
+                    </div>
+
+                    <div class="withdraw-processing-list">
+                        <div class="withdraw-processing-row"><span class="k">Asset</span><span id="withdrawReceiptAsset" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">Amount</span><span id="withdrawReceiptAmount" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">Network</span><span id="withdrawReceiptNetwork" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">Stage</span><span id="withdrawReceiptStage" class="v">Queued</span></div>
+                        <div class="withdraw-processing-row"><span class="k">Destination</span><span id="withdrawReceiptAddress" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">Request ID</span><span id="withdrawReceiptReference" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">TxID</span><span id="withdrawReceiptTxid" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">Submitted</span><span id="withdrawReceiptSubmitted" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">Last update</span><span id="withdrawReceiptLastUpdate" class="v">--</span></div>
+                        <div class="withdraw-processing-row"><span class="k">ETA</span><span id="withdrawReceiptEta" class="v">--</span></div>
+                    </div>
+
+                    <p class="withdraw-processing-footnote">Your request has passed validation and balance lock. Status updates will continue here automatically for the next few minutes.</p>
+                </div>
+
+                <button id="withdrawGoProcessingBtn" class="btn-pro btn-pro-primary" style="width:100%;"><i class="fas fa-rotate"></i> Refresh Updates</button>
+            </section>
+
             <div id="withdrawNetworkWarning" class="network-warning-inline network-warning-dock d-none">
                 <p id="withdrawNetworkWarningText" class="network-warning-text mb-0">Make sure the selected network matches your destination wallet network.</p>
                 <div class="network-warning-actions">
@@ -776,6 +1225,63 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                     </label>
                     <button id="withdrawNetworkConfirmBtn" type="button" class="btn-pro btn-pro-primary" style="width: 100%;"><i class="fas fa-check"></i> Got it</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="offcanvas offcanvas-end chat-modal" tabindex="-1" id="assetAlertsModal" style="z-index: 10524;">
+        <div class="chat-header pb-3 border-bottom border-secondary border-opacity-10 align-items-center justify-content-between">
+            <div class="d-flex align-items-center gap-3">
+                <button type="button" data-bs-dismiss="offcanvas" class="transfer-back-btn" aria-label="Close alerts"><i class="fas fa-chevron-left"></i></button>
+                <div>
+                    <div style="font-weight: 700; font-size: 1.1rem;">Alerts</div>
+                    <div style="font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.8px;">Notifications for <?php echo htmlspecialchars($asset, ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+            </div>
+            <button id="clearAssetAlertsBtn" type="button" class="btn-pro btn-pro-secondary" style="max-width: 110px; min-height: 36px;"><i class="fas fa-trash"></i> Clear</button>
+        </div>
+
+        <div class="chat-body transfer-flow" style="padding-top:1.2rem !important;">
+            <div id="assetAlertsFeed" class="asset-feed-wrap"></div>
+        </div>
+    </div>
+
+    <div class="offcanvas offcanvas-end chat-modal" tabindex="-1" id="assetHistoryModal" style="z-index: 10523;">
+        <div class="chat-header pb-3 border-bottom border-secondary border-opacity-10 align-items-center justify-content-between">
+            <div class="d-flex align-items-center gap-3">
+                <button type="button" data-bs-dismiss="offcanvas" class="transfer-back-btn" aria-label="Close history"><i class="fas fa-chevron-left"></i></button>
+                <div>
+                    <div style="font-weight: 700; font-size: 1.1rem;">History</div>
+                    <div style="font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.8px;">Recent <?php echo htmlspecialchars($asset, ENT_QUOTES, 'UTF-8'); ?> actions</div>
+                </div>
+            </div>
+            <button id="clearAssetHistoryBtn" type="button" class="btn-pro btn-pro-secondary" style="max-width: 110px; min-height: 36px;"><i class="fas fa-trash"></i> Clear</button>
+        </div>
+
+        <div class="chat-body transfer-flow" style="padding-top:1.2rem !important;">
+            <div id="assetHistoryFeed" class="asset-feed-wrap"></div>
+        </div>
+    </div>
+
+    <div class="offcanvas offcanvas-end chat-modal" tabindex="-1" id="assetTxDetailsModal" style="z-index: 10522;">
+        <div class="chat-header pb-3 border-bottom border-secondary border-opacity-10 align-items-center justify-content-between">
+            <div class="d-flex align-items-center gap-3">
+                <button type="button" data-bs-dismiss="offcanvas" class="transfer-back-btn" aria-label="Close transaction details"><i class="fas fa-chevron-left"></i></button>
+                <div>
+                    <div style="font-weight: 700; font-size: 1.1rem;" id="txDetailsTitle">Transaction Details</div>
+                    <div style="font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.8px;" id="txDetailsAsset">--</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-body transfer-flow" style="padding-top:1.2rem !important;">
+            <div class="asset-feed-item">
+                <p class="asset-feed-message mb-3" id="txDetailsMessage">Select a transaction from History to view details.</p>
+                <div class="small text-muted mb-2">Status: <span id="txDetailsStatus">--</span></div>
+                <div class="small text-muted mb-2">Amount: <span id="txDetailsAmount">--</span></div>
+                <div class="small text-muted mb-2">Method: <span id="txDetailsMethod">--</span></div>
+                <div class="small text-muted mb-2">Reference: <span id="txDetailsReference">--</span></div>
+                <div class="small text-muted">Time: <span id="txDetailsTime">--</span></div>
             </div>
         </div>
     </div>
@@ -799,6 +1305,8 @@ $availableNetworks = $assetNetworks[$asset] ?? [
             'amount' => $amount,
             'amountDisplay' => $amountDisplay,
         ], JSON_UNESCAPED_SLASHES); ?>;
+
+        window.assetFeedSeed = <?php echo json_encode($assetFeedSeed, JSON_UNESCAPED_SLASHES); ?>;
 
         (function () {
             function formatNetworkFee(networkId) {
@@ -863,6 +1371,383 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                     return;
                 }
 
+                var alertsStorageKey = 'finpay_asset_alerts_' + cfg.asset;
+                var historyStorageKey = 'finpay_asset_history_' + cfg.asset;
+                var activityJournalKey = 'finpay_activity_journal';
+
+                var alertFeedEl = document.getElementById('assetAlertsFeed');
+                var historyFeedEl = document.getElementById('assetHistoryFeed');
+                var clearAlertsBtn = document.getElementById('clearAssetAlertsBtn');
+                var clearHistoryBtn = document.getElementById('clearAssetHistoryBtn');
+                var historyModalEl = document.getElementById('assetHistoryModal');
+                var historyModal = historyModalEl && window.bootstrap ? window.bootstrap.Offcanvas.getOrCreateInstance(historyModalEl) : null;
+                var txDetailsTitleEl = document.getElementById('txDetailsTitle');
+                var txDetailsAssetEl = document.getElementById('txDetailsAsset');
+                var txDetailsMessageEl = document.getElementById('txDetailsMessage');
+                var txDetailsStatusEl = document.getElementById('txDetailsStatus');
+                var txDetailsAmountEl = document.getElementById('txDetailsAmount');
+                var txDetailsMethodEl = document.getElementById('txDetailsMethod');
+                var txDetailsReferenceEl = document.getElementById('txDetailsReference');
+                var txDetailsTimeEl = document.getElementById('txDetailsTime');
+                var txDetailsModalEl = document.getElementById('assetTxDetailsModal');
+                var txDetailsModal = txDetailsModalEl && window.bootstrap ? window.bootstrap.Offcanvas.getOrCreateInstance(txDetailsModalEl) : null;
+
+                function nowIso() {
+                    return new Date().toISOString();
+                }
+
+                function readFeed(key) {
+                    try {
+                        var raw = localStorage.getItem(key);
+                        var parsed = raw ? JSON.parse(raw) : [];
+                        return Array.isArray(parsed) ? parsed : [];
+                    } catch (e) {
+                        return [];
+                    }
+                }
+
+                function writeFeed(key, list) {
+                    try {
+                        localStorage.setItem(key, JSON.stringify(list.slice(0, 80)));
+                    } catch (e) {
+                        // no-op
+                    }
+                }
+
+                function formatFeedTime(ts) {
+                    var d = ts ? new Date(ts) : new Date();
+                    if (Number.isNaN(d.getTime())) {
+                        d = new Date();
+                    }
+                    return d.toLocaleString();
+                }
+
+                function renderAlerts() {
+                    if (!alertFeedEl) {
+                        return;
+                    }
+
+                    var items = readFeed(alertsStorageKey);
+                    if (!items.length) {
+                        alertFeedEl.innerHTML = '<div class="asset-feed-empty">No alerts yet. Important updates for this asset will appear here.</div>';
+                        return;
+                    }
+
+                    alertFeedEl.innerHTML = items.map(function (item) {
+                        var level = String(item.level || 'info');
+                        var safeLevel = ['info', 'success', 'warning', 'error'].indexOf(level) >= 0 ? level : 'info';
+                        return '<article class="asset-alert-item is-' + safeLevel + '">' +
+                            '<div class="asset-alert-head">' +
+                                '<div class="asset-alert-title">' + String(item.title || 'Alert') + '</div>' +
+                                '<div class="asset-alert-meta">' + formatFeedTime(item.ts) + '</div>' +
+                            '</div>' +
+                            '<p class="asset-alert-message">' + String(item.message || '') + '</p>' +
+                        '</article>';
+                    }).join('');
+                }
+
+                function renderHistory() {
+                    if (!historyFeedEl) {
+                        return;
+                    }
+
+                    var items = readFeed(historyStorageKey);
+                    if (!items.length) {
+                        historyFeedEl.innerHTML = '<div class="asset-feed-empty">No history yet. Your asset activity will be tracked here.</div>';
+                        return;
+                    }
+
+                    historyFeedEl.innerHTML = items.map(function (item, idx) {
+                        var kind = String(item.kind || 'activity').toUpperCase();
+                        return '<article class="asset-history-item clickable" data-history-idx="' + idx + '" tabindex="0" role="button" aria-label="View transaction details">' +
+                            '<div class="asset-history-head">' +
+                                '<div class="asset-history-title">' + String(item.title || 'Activity') + '</div>' +
+                                '<div class="asset-history-meta">' + formatFeedTime(item.ts) + '</div>' +
+                            '</div>' +
+                            '<div class="d-flex justify-content-between align-items-center gap-2 mb-1">' +
+                                '<span class="asset-pill">' + kind + '</span>' +
+                                '<span class="asset-history-meta">' + cfg.asset + '</span>' +
+                            '</div>' +
+                            '<p class="asset-history-message">' + String(item.message || '') + '</p>' +
+                        '</article>';
+                    }).join('');
+                }
+
+                function openHistoryDetails(item) {
+                    if (!item || !txDetailsModal) {
+                        return;
+                    }
+
+                    var details = item.details && typeof item.details === 'object' ? item.details : {};
+                    if (txDetailsTitleEl) {
+                        txDetailsTitleEl.textContent = String(item.title || 'Transaction Details');
+                    }
+                    if (txDetailsAssetEl) {
+                        txDetailsAssetEl.textContent = String(details.asset || cfg.asset || '--');
+                    }
+                    if (txDetailsMessageEl) {
+                        txDetailsMessageEl.textContent = String(item.message || '--');
+                    }
+                    if (txDetailsStatusEl) {
+                        txDetailsStatusEl.textContent = String(details.status || String(item.kind || '--').toUpperCase());
+                    }
+                    if (txDetailsAmountEl) {
+                        txDetailsAmountEl.textContent = String(details.amount || '--');
+                    }
+                    if (txDetailsMethodEl) {
+                        txDetailsMethodEl.textContent = String(details.method || '--');
+                    }
+                    if (txDetailsReferenceEl) {
+                        txDetailsReferenceEl.textContent = String(details.reference || '--');
+                    }
+                    if (txDetailsTimeEl) {
+                        txDetailsTimeEl.textContent = formatFeedTime(details.time || item.ts);
+                    }
+
+                    if (historyModal) {
+                        historyModal.hide();
+                    }
+                    txDetailsModal.show();
+                }
+
+                function sortByTsDesc(list) {
+                    return list.slice().sort(function (a, b) {
+                        var ta = Date.parse((a && a.ts) ? String(a.ts) : '') || 0;
+                        var tb = Date.parse((b && b.ts) ? String(b.ts) : '') || 0;
+                        return tb - ta;
+                    });
+                }
+
+                function dedupeAndLimit(list, maxItems, mode) {
+                    var seen = Object.create(null);
+                    var out = [];
+                    sortByTsDesc(Array.isArray(list) ? list : []).forEach(function (item) {
+                        if (!item || typeof item !== 'object') {
+                            return;
+                        }
+
+                        var title = String(item.title || '').trim();
+                        var message = String(item.message || '').trim();
+                        var ts = String(item.ts || '').trim();
+                        var tag = mode === 'alerts'
+                            ? String(item.level || 'info').toLowerCase()
+                            : String(item.kind || 'activity').toLowerCase();
+
+                        var signature = [tag, title, message, ts.slice(0, 19)].join('|');
+                        if (signature === '|||') {
+                            return;
+                        }
+                        if (seen[signature]) {
+                            return;
+                        }
+                        seen[signature] = true;
+                        out.push(item);
+                    });
+
+                    return out.slice(0, maxItems);
+                }
+
+                function detailLooksLikeAsset(detail) {
+                    if (!detail || typeof detail !== 'object') {
+                        return false;
+                    }
+
+                    var symbol = String(detail.asset || detail.symbol || '').toUpperCase();
+                    if (symbol && symbol === String(cfg.asset || '').toUpperCase()) {
+                        return true;
+                    }
+
+                    var title = String(detail.title || '').toUpperCase();
+                    var message = String(detail.message || '').toUpperCase();
+                    var needle = String(cfg.asset || '').toUpperCase();
+
+                    return !!needle && (title.indexOf(needle) >= 0 || message.indexOf(needle) >= 0);
+                }
+
+                function collectJournalSeed() {
+                    var raw = readFeed(activityJournalKey);
+                    var out = {
+                        alerts: [],
+                        history: [],
+                    };
+
+                    raw.forEach(function (entry) {
+                        var detail = entry && entry.detail ? entry.detail : entry;
+                        if (!detailLooksLikeAsset(detail)) {
+                            return;
+                        }
+
+                        var kind = String(detail.kind || detail.type || 'activity').toLowerCase();
+                        var ts = String(entry.ts || detail.ts || nowIso());
+                        var title = String(detail.title || 'Activity');
+                        var message = String(detail.message || 'Asset activity update');
+
+                        out.history.push({
+                            kind: kind,
+                            title: title,
+                            message: message,
+                            ts: ts,
+                            details: detail.details && typeof detail.details === 'object' ? detail.details : {
+                                source: String(detail.source || 'activity'),
+                                status: kind.toUpperCase(),
+                                amount: '--',
+                                method: '--',
+                                reference: '--',
+                                time: ts,
+                                asset: String(cfg.asset || '').toUpperCase(),
+                            },
+                        });
+
+                        out.alerts.push({
+                            level: kind === 'error' ? 'error' : (kind === 'warning' ? 'warning' : 'info'),
+                            title: title,
+                            message: message,
+                            ts: ts,
+                        });
+                    });
+
+                    return out;
+                }
+
+                function hydrateFeeds() {
+                    var persistedAlerts = readFeed(alertsStorageKey);
+                    var persistedHistory = readFeed(historyStorageKey);
+                    var seed = window.assetFeedSeed && typeof window.assetFeedSeed === 'object'
+                        ? window.assetFeedSeed
+                        : { alerts: [], history: [] };
+                    var journal = collectJournalSeed();
+
+                    var mergedAlerts = dedupeAndLimit(
+                        [].concat(persistedAlerts, seed.alerts || [], journal.alerts || []),
+                        80,
+                        'alerts'
+                    );
+                    var mergedHistory = dedupeAndLimit(
+                        [].concat(persistedHistory, seed.history || [], journal.history || []),
+                        80,
+                        'history'
+                    );
+
+                    if (!mergedAlerts.length && mergedHistory.length) {
+                        mergedAlerts = mergedHistory.slice(0, 6).map(function (item) {
+                            return {
+                                level: 'info',
+                                title: String(item.title || 'Activity'),
+                                message: String(item.message || 'Recent asset activity update.'),
+                                ts: String(item.ts || nowIso())
+                            };
+                        });
+                    }
+
+                    writeFeed(alertsStorageKey, mergedAlerts);
+                    writeFeed(historyStorageKey, mergedHistory);
+                }
+
+                function pushAlert(level, title, message) {
+                    var items = readFeed(alertsStorageKey);
+                    items.unshift({
+                        level: level,
+                        title: title,
+                        message: message,
+                        ts: nowIso()
+                    });
+                    writeFeed(alertsStorageKey, items);
+                    renderAlerts();
+                }
+
+                function pushHistory(kind, title, message, details) {
+                    var items = readFeed(historyStorageKey);
+                    items.unshift({
+                        kind: kind,
+                        title: title,
+                        message: message,
+                        ts: nowIso(),
+                        details: details && typeof details === 'object' ? details : null,
+                    });
+                    writeFeed(historyStorageKey, items);
+                    renderHistory();
+                }
+
+                if (clearAlertsBtn) {
+                    clearAlertsBtn.addEventListener('click', function () {
+                        writeFeed(alertsStorageKey, []);
+                        renderAlerts();
+                    });
+                }
+
+                if (clearHistoryBtn) {
+                    clearHistoryBtn.addEventListener('click', function () {
+                        writeFeed(historyStorageKey, []);
+                        renderHistory();
+                    });
+                }
+
+                if (historyFeedEl) {
+                    historyFeedEl.addEventListener('click', function (event) {
+                        var row = event.target && event.target.closest ? event.target.closest('[data-history-idx]') : null;
+                        if (!row) {
+                            return;
+                        }
+
+                        var idx = parseInt(row.getAttribute('data-history-idx') || '-1', 10);
+                        var items = readFeed(historyStorageKey);
+                        if (idx < 0 || idx >= items.length) {
+                            return;
+                        }
+
+                        openHistoryDetails(items[idx]);
+                    });
+
+                    historyFeedEl.addEventListener('keydown', function (event) {
+                        if (event.key !== 'Enter' && event.key !== ' ') {
+                            return;
+                        }
+
+                        var row = event.target && event.target.closest ? event.target.closest('[data-history-idx]') : null;
+                        if (!row) {
+                            return;
+                        }
+
+                        event.preventDefault();
+                        var idx = parseInt(row.getAttribute('data-history-idx') || '-1', 10);
+                        var items = readFeed(historyStorageKey);
+                        if (idx < 0 || idx >= items.length) {
+                            return;
+                        }
+
+                        openHistoryDetails(items[idx]);
+                    });
+                }
+
+                hydrateFeeds();
+                renderAlerts();
+                renderHistory();
+
+                window.addEventListener('finpay:activity', function (event) {
+                    var detail = (event && event.detail) ? event.detail : {};
+                    if (!detailLooksLikeAsset(detail)) {
+                        return;
+                    }
+                    if (String(detail.source || '') === 'asset_details') {
+                        return;
+                    }
+
+                    var kind = String(detail.kind || detail.type || 'info').toLowerCase();
+                    var title = String(detail.title || 'Activity');
+                    var message = String(detail.message || 'Asset activity update');
+
+                    pushHistory(kind, title, message, detail.details && typeof detail.details === 'object' ? detail.details : {
+                        source: String(detail.source || 'activity'),
+                        status: kind.toUpperCase(),
+                        amount: '--',
+                        method: '--',
+                        reference: '--',
+                        time: nowIso(),
+                        asset: String(cfg.asset || '').toUpperCase(),
+                    });
+                    pushAlert(kind === 'error' ? 'error' : (kind === 'warning' ? 'warning' : 'info'), title, message);
+                });
+
                 var selectedDepositNetwork = null;
                 var selectedWithdrawNetwork = null;
 
@@ -872,6 +1757,7 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 var depositStep2 = document.getElementById('depositStep2');
                 var withdrawStep1 = document.getElementById('withdrawStep1');
                 var withdrawStep2 = document.getElementById('withdrawStep2');
+                var withdrawStep3 = document.getElementById('withdrawStep3');
                 var depositStepBadge = document.getElementById('depositStepBadge');
                 var withdrawStepBadge = document.getElementById('withdrawStepBadge');
                 var depositAddressEl = document.getElementById('depositAddress');
@@ -879,6 +1765,18 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 var depositNetworkMeta = document.getElementById('depositNetworkMeta');
                 var withdrawNetworkMeta = document.getElementById('withdrawNetworkMeta');
                 var withdrawFeeText = document.getElementById('withdrawFeeText');
+                var withdrawReceiptStatus = document.getElementById('withdrawReceiptStatus');
+                var withdrawReceiptAsset = document.getElementById('withdrawReceiptAsset');
+                var withdrawReceiptAmount = document.getElementById('withdrawReceiptAmount');
+                var withdrawReceiptNetwork = document.getElementById('withdrawReceiptNetwork');
+                var withdrawReceiptAddress = document.getElementById('withdrawReceiptAddress');
+                var withdrawReceiptReference = document.getElementById('withdrawReceiptReference');
+                var withdrawReceiptTxid = document.getElementById('withdrawReceiptTxid');
+                var withdrawReceiptSubmitted = document.getElementById('withdrawReceiptSubmitted');
+                var withdrawReceiptLastUpdate = document.getElementById('withdrawReceiptLastUpdate');
+                var withdrawReceiptStage = document.getElementById('withdrawReceiptStage');
+                var withdrawReceiptEta = document.getElementById('withdrawReceiptEta');
+                var withdrawGoProcessingBtn = document.getElementById('withdrawGoProcessingBtn');
                 var depositWarningBox = document.getElementById('depositNetworkWarning');
                 var depositWarningText = document.getElementById('depositNetworkWarningText');
                 var depositConfirmBtn = document.getElementById('depositNetworkConfirmBtn');
@@ -889,6 +1787,149 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 var withdrawDontShowAgain = document.getElementById('withdrawDontShowAgain');
                 var depositWarningAfterConfirm = null;
                 var withdrawWarningAfterConfirm = null;
+                var withdrawStatusPollTimer = null;
+                var withdrawStageTimer = null;
+                var withdrawCurrentReference = '';
+                var withdrawSubmittedAtMs = 0;
+
+                function shortAddress(address) {
+                    var text = String(address || '').trim();
+                    if (text.length <= 20) {
+                        return text;
+                    }
+                    return text.substring(0, 10) + '...' + text.substring(text.length - 8);
+                }
+
+                function clearWithdrawProcessingTimers() {
+                    if (withdrawStatusPollTimer) {
+                        clearInterval(withdrawStatusPollTimer);
+                        withdrawStatusPollTimer = null;
+                    }
+                    if (withdrawStageTimer) {
+                        clearInterval(withdrawStageTimer);
+                        withdrawStageTimer = null;
+                    }
+                }
+
+                function updateWithdrawStageByElapsed() {
+                    if (!withdrawReceiptStage) {
+                        return;
+                    }
+
+                    var elapsedSec = Math.max(0, Math.floor((Date.now() - withdrawSubmittedAtMs) / 1000));
+                    var stage = 'Queued for processing';
+                    if (elapsedSec >= 60) {
+                        stage = 'Compliance and risk checks';
+                    }
+                    if (elapsedSec >= 120) {
+                        stage = 'Preparing network broadcast';
+                    }
+                    if (elapsedSec >= 180) {
+                        stage = 'Awaiting network confirmations';
+                    }
+
+                    withdrawReceiptStage.textContent = stage;
+                }
+
+                function refreshWithdrawStatus() {
+                    if (!withdrawCurrentReference) {
+                        return;
+                    }
+
+                    fetch('../api/v1/crypto/withdraw_status.php?reference=' + encodeURIComponent(withdrawCurrentReference), {
+                        method: 'GET',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': 'application/json'
+                        }
+                    })
+                    .then(function (response) {
+                        return response.text().then(function (raw) {
+                            var payload;
+                            try {
+                                payload = JSON.parse(raw);
+                            } catch (e) {
+                                throw new Error('Status API returned invalid JSON');
+                            }
+
+                            if (!response.ok || !payload || payload.success !== true || !payload.data) {
+                                throw new Error(payload && payload.message ? payload.message : 'Unable to refresh status');
+                            }
+
+                            return payload.data.withdrawal || {};
+                        });
+                    })
+                    .then(function (remote) {
+                        if (withdrawReceiptStatus) {
+                            withdrawReceiptStatus.textContent = String(remote.status || 'processing').toUpperCase();
+                        }
+                        if (withdrawReceiptEta) {
+                            withdrawReceiptEta.textContent = remote.eta || '5-20 minutes';
+                        }
+                        if (withdrawReceiptLastUpdate) {
+                            withdrawReceiptLastUpdate.textContent = new Date().toLocaleTimeString();
+                        }
+                    })
+                    .catch(function () {
+                        if (withdrawReceiptLastUpdate) {
+                            withdrawReceiptLastUpdate.textContent = new Date().toLocaleTimeString();
+                        }
+                    });
+                }
+
+                function showWithdrawProcessingStep(details) {
+                    clearWithdrawProcessingTimers();
+                    if (withdrawStep1) withdrawStep1.classList.add('d-none');
+                    if (withdrawStep2) withdrawStep2.classList.add('d-none');
+                    if (withdrawStep3) withdrawStep3.classList.remove('d-none');
+                    if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 3/3';
+
+                    withdrawCurrentReference = details.reference ? String(details.reference) : '';
+                    withdrawSubmittedAtMs = Date.parse(details.submitted_at || '') || Date.now();
+
+                    if (withdrawReceiptStatus) {
+                        withdrawReceiptStatus.textContent = (details.status || 'processing').toUpperCase();
+                    }
+                    if (withdrawReceiptAsset) {
+                        withdrawReceiptAsset.textContent = cfg.asset;
+                    }
+                    if (withdrawReceiptAmount) {
+                        withdrawReceiptAmount.textContent = (details.amount_display || '--') + ' ' + cfg.asset;
+                    }
+                    if (withdrawReceiptNetwork) {
+                        withdrawReceiptNetwork.textContent = selectedWithdrawNetwork ? selectedWithdrawNetwork.name : (details.network || '--');
+                    }
+                    if (withdrawReceiptAddress) {
+                        withdrawReceiptAddress.textContent = shortAddress(details.address || '');
+                    }
+                    if (withdrawReceiptReference) {
+                        withdrawReceiptReference.textContent = details.reference || '--';
+                    }
+                    if (withdrawReceiptTxid) {
+                        withdrawReceiptTxid.textContent = details.tracking_txid || '--';
+                    }
+                    if (withdrawReceiptSubmitted) {
+                        withdrawReceiptSubmitted.textContent = details.submitted_at || new Date().toISOString();
+                    }
+                    if (withdrawReceiptLastUpdate) {
+                        withdrawReceiptLastUpdate.textContent = new Date().toLocaleTimeString();
+                    }
+                    if (withdrawReceiptEta) {
+                        withdrawReceiptEta.textContent = details.eta || '5-20 minutes';
+                    }
+
+                    updateWithdrawStageByElapsed();
+
+                    if (withdrawGoProcessingBtn) {
+                        withdrawGoProcessingBtn.onclick = function () {
+                            refreshWithdrawStatus();
+                        };
+                    }
+
+                    refreshWithdrawStatus();
+                    withdrawStageTimer = setInterval(updateWithdrawStageByElapsed, 15000);
+                    withdrawStatusPollTimer = setInterval(refreshWithdrawStatus, 25000);
+                }
 
                 function shouldSkipWarning() {
                     try {
@@ -981,11 +2022,15 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                 }
 
                 function resetWithdrawFlow() {
+                    clearWithdrawProcessingTimers();
+                    withdrawCurrentReference = '';
+                    withdrawSubmittedAtMs = 0;
                     selectedWithdrawNetwork = null;
                     renderWithdrawNetworks();
+                    if (withdrawStep3) withdrawStep3.classList.add('d-none');
                     if (withdrawStep2) withdrawStep2.classList.add('d-none');
                     if (withdrawStep1) withdrawStep1.classList.remove('d-none');
-                    if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 1/2';
+                    if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 1/3';
                     if (withdrawNetworkMeta) withdrawNetworkMeta.textContent = '';
                     if (withdrawFeeText) withdrawFeeText.textContent = '--';
                     if (withdrawAddressInput) withdrawAddressInput.value = '';
@@ -1032,6 +2077,16 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                                     if (depositQrImage) {
                                         depositQrImage.src = 'https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=' + encodeURIComponent(address);
                                     }
+                                    pushAlert('info', 'Deposit Address Ready', selectedDepositNetwork.name + ' address generated for ' + cfg.asset + '.');
+                                    pushHistory('deposit', 'Deposit Address Generated', selectedDepositNetwork.name + ' address is ready for funding.', {
+                                        source: 'deposit_address',
+                                        status: 'READY',
+                                        amount: '--',
+                                        method: selectedDepositNetwork.name,
+                                        reference: '--',
+                                        time: nowIso(),
+                                        asset: cfg.asset,
+                                    });
                                 })
                                 .catch(function (error) {
                                     var errMsg = (error && error.message) ? String(error.message) : 'Try again.';
@@ -1046,6 +2101,16 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                                             copyBtn.innerHTML = '<i class="fas fa-copy"></i> Copy Address';
                                         }, 1800);
                                     }
+                                    pushAlert('error', 'Deposit Address Failed', 'Could not generate a deposit address for ' + cfg.asset + '.');
+                                    pushHistory('deposit_error', 'Deposit Address Failed', errMsg, {
+                                        source: 'deposit_address',
+                                        status: 'FAILED',
+                                        amount: '--',
+                                        method: selectedDepositNetwork ? selectedDepositNetwork.name : '--',
+                                        reference: '--',
+                                        time: nowIso(),
+                                        asset: cfg.asset,
+                                    });
                                     console.error(error);
                                 });
                             }
@@ -1072,7 +2137,7 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                             function () {
                             if (withdrawStep1) withdrawStep1.classList.add('d-none');
                             if (withdrawStep2) withdrawStep2.classList.remove('d-none');
-                            if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 2/2';
+                            if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 2/3';
                             if (withdrawNetworkMeta) withdrawNetworkMeta.textContent = selectedWithdrawNetwork.name + ' • ' + selectedWithdrawNetwork.tag;
                             if (withdrawFeeText) withdrawFeeText.textContent = formatNetworkFee(selectedWithdrawNetwork.id);
                             }
@@ -1129,6 +2194,16 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                             setTimeout(function () {
                                 copyBtn.innerHTML = '<i class="fas fa-copy"></i> Copy Address';
                             }, 1500);
+                            pushAlert('success', 'Address Copied', 'Deposit address copied to clipboard.');
+                            pushHistory('deposit', 'Address Copied', 'Deposit address copied for quick transfer setup.', {
+                                source: 'deposit_address',
+                                status: 'COPIED',
+                                amount: '--',
+                                method: selectedDepositNetwork ? selectedDepositNetwork.name : '--',
+                                reference: '--',
+                                time: nowIso(),
+                                asset: cfg.asset,
+                            });
                         });
                     });
                 }
@@ -1138,29 +2213,208 @@ $availableNetworks = $assetNetworks[$asset] ?? [
                     withdrawBackBtn.addEventListener('click', function () {
                         if (withdrawStep2) withdrawStep2.classList.add('d-none');
                         if (withdrawStep1) withdrawStep1.classList.remove('d-none');
-                        if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 1/2';
+                        if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 1/3';
                         hideInlineNetworkWarning(withdrawWarningBox);
                         withdrawWarningAfterConfirm = null;
+                    });
+                }
+
+                var withdrawReceiptBackBtn = document.getElementById('withdrawReceiptBackBtn');
+                if (withdrawReceiptBackBtn) {
+                    withdrawReceiptBackBtn.addEventListener('click', function () {
+                        clearWithdrawProcessingTimers();
+                        if (withdrawStep3) withdrawStep3.classList.add('d-none');
+                        if (withdrawStep2) withdrawStep2.classList.remove('d-none');
+                        if (withdrawStepBadge) withdrawStepBadge.textContent = 'Step 2/3';
                     });
                 }
 
                 var withdrawReviewBtn = document.getElementById('withdrawReviewBtn');
                 var withdrawAddressInput = document.getElementById('withdrawAddressInput');
                 var withdrawAmountInput = document.getElementById('withdrawAmountInput');
+                var notify = (window.finpayNotify && typeof window.finpayNotify === 'function')
+                    ? window.finpayNotify
+                    : function (message) { alert(message); };
                 if (withdrawReviewBtn) {
                     withdrawReviewBtn.addEventListener('click', function () {
                         var address = withdrawAddressInput ? withdrawAddressInput.value.trim() : '';
                         var amount = withdrawAmountInput ? parseFloat(withdrawAmountInput.value) : 0;
 
                         if (!address || amount <= 0) {
-                            withdrawReviewBtn.innerHTML = '<i class="fas fa-exclamation-circle"></i> Enter address and amount';
-                            setTimeout(function () {
-                                withdrawReviewBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Review Withdrawal';
-                            }, 1600);
+                            notify('Enter a valid address and amount before continuing.', {
+                                type: 'warning',
+                                title: 'Withdrawal Validation'
+                            });
                             return;
                         }
 
-                        withdrawReviewBtn.innerHTML = '<i class="fas fa-check"></i> Ready for Confirmation';
+                        if (!selectedWithdrawNetwork || !selectedWithdrawNetwork.id) {
+                            notify('Select a withdrawal network first.', {
+                                type: 'warning',
+                                title: 'Network Required'
+                            });
+                            return;
+                        }
+
+                        withdrawReviewBtn.disabled = true;
+
+                        fetch('../api/v1/crypto/withdraw_internal.php', {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                asset: cfg.asset,
+                                network: selectedWithdrawNetwork.id,
+                                address: address,
+                                amount: amount
+                            })
+                        })
+                        .then(function (response) {
+                            return response.text().then(function (raw) {
+                                var payload;
+                                try {
+                                    payload = JSON.parse(raw);
+                                } catch (e) {
+                                    throw new Error('Withdrawal API returned invalid JSON');
+                                }
+
+                                if (!response.ok || !payload || payload.success !== true || !payload.data) {
+                                    throw new Error(payload && payload.message ? payload.message : 'Unable to process withdrawal');
+                                }
+
+                                return payload.data;
+                            });
+                        })
+                        .then(function (data) {
+                            var balance = data.balance || {};
+                            var newAmount = Number(balance.amount || 0);
+                            var displayAmount = (cfg.asset === 'GBP')
+                                ? newAmount.toFixed(2)
+                                : newAmount.toFixed(6).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+
+                            cfg.balance = newAmount;
+                            cfg.balanceDisplay = displayAmount;
+
+                            var cryptoBalanceEl = document.getElementById('crypto-balance');
+                            if (cryptoBalanceEl) {
+                                cryptoBalanceEl.setAttribute('data-amount', String(newAmount));
+                                cryptoBalanceEl.textContent = displayAmount + ' ' + cfg.asset;
+                            }
+
+                            var mobileHoldingEl = document.querySelector('.asset-mobile-holding-value');
+                            if (mobileHoldingEl) {
+                                mobileHoldingEl.textContent = displayAmount + ' ' + cfg.asset;
+                            }
+
+                            var sublineEls = document.querySelectorAll('.transfer-subline');
+                            sublineEls.forEach(function (el) {
+                                if (el && el.textContent && el.textContent.indexOf('Balance:') === 0) {
+                                    el.textContent = 'Balance: ' + displayAmount + ' ' + cfg.asset;
+                                }
+                            });
+
+                            var withdrawal = data.withdrawal || {};
+                            var receipt = {
+                                reference: withdrawal.reference || '',
+                                amount_display: withdrawal.amount_display || amount.toFixed(6),
+                                network: withdrawal.network || (selectedWithdrawNetwork ? selectedWithdrawNetwork.id : ''),
+                                address: withdrawal.address || address,
+                                tracking_txid: withdrawal.tracking_txid || '',
+                                status: withdrawal.status || 'processing',
+                                submitted_at: withdrawal.submitted_at || new Date().toISOString(),
+                                eta: withdrawal.eta || '5-20 minutes'
+                            };
+
+                            notify('Withdrawal submitted. It is now in processing queue.', {
+                                type: 'success',
+                                title: 'Withdrawal Submitted'
+                            });
+                            pushAlert('success', 'Withdrawal Submitted', cfg.asset + ' withdrawal is now in processing queue.');
+                            pushHistory('withdrawal', 'Withdrawal Submitted', receipt.amount_display + ' ' + cfg.asset + ' to ' + shortAddress(receipt.address), {
+                                source: 'withdrawals',
+                                status: String(receipt.status || 'processing').toUpperCase(),
+                                amount: '-' + receipt.amount_display + ' ' + cfg.asset,
+                                method: selectedWithdrawNetwork ? selectedWithdrawNetwork.name : '--',
+                                reference: receipt.reference || '--',
+                                time: receipt.submitted_at || nowIso(),
+                                asset: cfg.asset,
+                            });
+
+                            window.dispatchEvent(new CustomEvent('finpay:activity', {
+                                detail: {
+                                    kind: 'info',
+                                    title: 'Withdrawal',
+                                    message: cfg.asset + ' withdrawal submitted for processing.',
+                                    asset: cfg.asset,
+                                    symbol: cfg.asset,
+                                    source: 'asset_details',
+                                    details: {
+                                        source: 'withdrawals',
+                                        status: String(receipt.status || 'processing').toUpperCase(),
+                                        amount: '-' + receipt.amount_display + ' ' + cfg.asset,
+                                        method: selectedWithdrawNetwork ? selectedWithdrawNetwork.name : '--',
+                                        reference: receipt.reference || '--',
+                                        time: receipt.submitted_at || nowIso(),
+                                        asset: cfg.asset,
+                                    },
+                                    important: true
+                                }
+                            }));
+
+                            showWithdrawProcessingStep(receipt);
+
+                            if (withdrawAddressInput) {
+                                withdrawAddressInput.value = '';
+                            }
+                            if (withdrawAmountInput) {
+                                withdrawAmountInput.value = '';
+                            }
+                        })
+                        .catch(function (error) {
+                            var msg = (error && error.message) ? String(error.message) : 'Could not process withdrawal';
+                            notify(msg, {
+                                type: 'error',
+                                title: 'Withdrawal Failed',
+                                duration: 4200
+                            });
+                            pushAlert('error', 'Withdrawal Failed', msg);
+                            pushHistory('withdrawal_error', 'Withdrawal Failed', msg, {
+                                source: 'withdrawals',
+                                status: 'FAILED',
+                                amount: '--',
+                                method: selectedWithdrawNetwork ? selectedWithdrawNetwork.name : '--',
+                                reference: '--',
+                                time: nowIso(),
+                                asset: cfg.asset,
+                            });
+
+                            window.dispatchEvent(new CustomEvent('finpay:activity', {
+                                detail: {
+                                    kind: 'error',
+                                    title: 'Withdrawal',
+                                    message: msg,
+                                    asset: cfg.asset,
+                                    symbol: cfg.asset,
+                                    source: 'asset_details',
+                                    details: {
+                                        source: 'withdrawals',
+                                        status: 'FAILED',
+                                        amount: '--',
+                                        method: selectedWithdrawNetwork ? selectedWithdrawNetwork.name : '--',
+                                        reference: '--',
+                                        time: nowIso(),
+                                        asset: cfg.asset,
+                                    },
+                                    important: true
+                                }
+                            }));
+                        })
+                        .finally(function () {
+                            withdrawReviewBtn.disabled = false;
+                        });
                     });
                 }
 
