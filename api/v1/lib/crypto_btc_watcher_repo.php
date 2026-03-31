@@ -91,6 +91,41 @@ function crypto_btc_watcher_repo_find_user_for_address(mysqli $dbc, string $netw
     return $row ?: null;
 }
 
+function crypto_btc_watcher_repo_list_active_addresses(mysqli $dbc, string $network, int $limit = 500): array
+{
+    if ($limit < 1) {
+        $limit = 1;
+    }
+    if ($limit > 5000) {
+        $limit = 5000;
+    }
+
+    $coin = 'BTC';
+    $active = 'active';
+    $sql = 'SELECT user_id, address FROM user_crypto_addresses WHERE coin = ? AND network = ? AND status = ? ORDER BY id ASC LIMIT ?';
+    $stmt = mysqli_prepare($dbc, $sql);
+    if (!$stmt) {
+        return [];
+    }
+
+    mysqli_stmt_bind_param($stmt, 'sssi', $coin, $network, $active, $limit);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    $rows = [];
+    if ($result) {
+        while ($row = mysqli_fetch_assoc($result)) {
+            $rows[] = [
+                'user_id' => (int)($row['user_id'] ?? 0),
+                'address' => (string)($row['address'] ?? ''),
+            ];
+        }
+    }
+
+    mysqli_stmt_close($stmt);
+    return $rows;
+}
+
 function crypto_btc_watcher_repo_upsert_event(
     mysqli $dbc,
     int $userId,
@@ -106,7 +141,7 @@ function crypto_btc_watcher_repo_upsert_event(
     $coin = 'BTC';
     $sql = 'INSERT INTO btc_deposit_events
         (user_id, coin, network, address, txid, vout, amount_btc, amount_sats, block_height, confirmations, credit_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \"pending\")
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'pending\')
         ON DUPLICATE KEY UPDATE
             user_id = VALUES(user_id),
             network = VALUES(network),

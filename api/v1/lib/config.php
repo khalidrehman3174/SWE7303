@@ -19,6 +19,9 @@ function api_config(): array
         'btc_indexer_base_url' => (string)(getenv('BTC_INDEXER_BASE_URL') ?: ''),
         'btc_watcher_max_blocks_per_run' => (int)(getenv('BTC_WATCHER_MAX_BLOCKS_PER_RUN') ?: 20),
         'btc_watcher_http_timeout_seconds' => (int)(getenv('BTC_WATCHER_HTTP_TIMEOUT_SECONDS') ?: 12),
+        'btc_watcher_max_runtime_seconds' => (int)(getenv('BTC_WATCHER_MAX_RUNTIME_SECONDS') ?: 90),
+        'btc_watcher_max_backfill_blocks' => (int)(getenv('BTC_WATCHER_MAX_BACKFILL_BLOCKS') ?: 2000),
+        'btc_watcher_max_addresses_per_run' => (int)(getenv('BTC_WATCHER_MAX_ADDRESSES_PER_RUN') ?: 500),
     ];
 
     // In production, only environment variables should be used.
