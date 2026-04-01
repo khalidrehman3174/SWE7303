@@ -272,21 +272,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .input-wrap input { position: relative; }
         .input-wrap i { z-index: 1; pointer-events: none; }
 
-        /* Password toggle */
-        .pw-toggle {
-            position: absolute;
-            right: 16px;
-            top: 50%;
-            transform: translateY(-50%);
-            background: none;
-            border: none;
-            cursor: pointer;
-            color: var(--gray-400);
-            font-size: 0.9rem;
+        /* Keep the login surface integrated instead of floating like a separate card */
+        .form-box {
+            background: transparent;
+            border: 0;
+            box-shadow: none;
             padding: 0;
-            transition: color 0.2s;
+            backdrop-filter: none;
         }
-        .pw-toggle:hover { color: var(--black); }
+        .form-box:hover {
+            box-shadow: none;
+            transform: none;
+        }
 
         /* Error */
         .auth-error {
@@ -492,9 +489,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <div class="input-wrap">
                             <input type="password" id="password" name="password" placeholder="Enter your password" required autocomplete="current-password">
                             <i class="fas fa-lock"></i>
-                            <button type="button" class="pw-toggle" id="togglePw" aria-label="Show password">
-                                <i class="far fa-eye" id="pw-eye"></i>
-                            </button>
                         </div>
                     </div>
 
@@ -512,17 +506,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
 
     </div>
-
-    <script>
-        const togglePw = document.getElementById('togglePw');
-        const pwField  = document.getElementById('password');
-        const pwEye    = document.getElementById('pw-eye');
-        togglePw.addEventListener('click', () => {
-            const isText = pwField.type === 'text';
-            pwField.type = isText ? 'password' : 'text';
-            pwEye.className = isText ? 'far fa-eye' : 'far fa-eye-slash';
-        });
-    </script>
 
 </body>
 </html>
