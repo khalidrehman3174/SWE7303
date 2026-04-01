@@ -1,0 +1,132 @@
+/* Global polish layer for FinPay UI surfaces.
+   Keeps existing visual language while adding consistency and refinement. */
+
+:root {
+    --polish-radius-sm: 12px;
+    --polish-radius-md: 16px;
+    --polish-radius-lg: 24px;
+    --polish-shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.06);
+    --polish-shadow-md: 0 14px 34px rgba(0, 0, 0, 0.10);
+    --polish-shadow-lg: 0 22px 52px rgba(0, 0, 0, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --polish-shadow-sm: 0 8px 22px rgba(0, 0, 0, 0.35);
+        --polish-shadow-md: 0 16px 38px rgba(0, 0, 0, 0.42);
+        --polish-shadow-lg: 0 26px 58px rgba(0, 0, 0, 0.50);
+    }
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    text-rendering: optimizeLegibility;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+.offcanvas,
+.asset-row,
+.btn-pro,
+.btn-rev,
+.btn-action,
+.setting-row,
+.p-block,
+.form-card,
+.form-box {
+    transition: box-shadow 200ms ease, transform 200ms ease, border-color 200ms ease, background-color 200ms ease, color 200ms ease, opacity 200ms ease;
+}
+
+/* Shared focus ring for better accessibility and professional feel */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 0.18rem rgba(16, 185, 129, 0.22);
+}
+
+.glass-panel,
+.list-pro,
+.settings-list,
+.chat-modal,
+.offcanvas,
+.p-block,
+.form-box {
+    box-shadow: var(--polish-shadow-sm);
+}
+
+.glass-panel:hover,
+.list-pro:hover,
+.settings-list:hover,
+.p-block:hover,
+.form-box:hover {
+    box-shadow: var(--polish-shadow-md);
+}
+
+/* User app refinements */
+.asset-row:hover {
+    transform: translateY(-1px);
+}
+
+.btn-pro:active,
+.btn-rev:active,
+.btn-action:active {
+    transform: translateY(1px) scale(0.985);
+}
+
+.chat-body {
+    scroll-behavior: smooth;
+}
+
+.chat-bubble {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.07);
+}
+
+.chat-bubble.sent {
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.14);
+}
+
+/* Landing refinements */
+.p-block {
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.p-block:hover {
+    transform: translateY(-2px);
+}
+
+.navbar-rev {
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.04);
+}
+
+/* Auth refinements */
+.form-box {
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    border-radius: var(--polish-radius-lg);
+    padding: 1.2rem;
+    backdrop-filter: blur(10px);
+}
+
+@media (max-width: 768px) {
+    .form-box {
+        border-radius: var(--polish-radius-md);
+        padding: 0.9rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
+}

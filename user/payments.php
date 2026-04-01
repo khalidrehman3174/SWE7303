@@ -495,6 +495,9 @@ require_once 'templates/head.php';
         const deleteContactApiUrl = '../api/v1/payments/contacts/delete.php';
         const sendPaymentApiUrl = '../api/v1/payments/contacts/send.php';
         const listContactsApiUrl = '../api/v1/payments/contacts/list.php?limit=500';
+        const globalNotify = (window.finpayNotify && typeof window.finpayNotify === 'function')
+            ? window.finpayNotify
+            : null;
 
         const CONTACTS_PAGE_SIZE = 12;
         let visibleLimit = CONTACTS_PAGE_SIZE;
@@ -790,6 +793,7 @@ require_once 'templates/head.php';
                         No transaction history yet for this contact.
                     </div>
                 `;
+                chatHistoryBox.scrollTop = chatHistoryBox.scrollHeight;
                 return;
             }
 
@@ -812,6 +816,24 @@ require_once 'templates/head.php';
             chatHistoryBox.innerHTML = rows;
         }
 
+        function scrollPaymentChatToLatest(smooth = false) {
+            if (!chatHistoryBox) {
+                return;
+            }
+
+            requestAnimationFrame(() => {
+                if (smooth && typeof chatHistoryBox.scrollTo === 'function') {
+                    chatHistoryBox.scrollTo({
+                        top: chatHistoryBox.scrollHeight,
+                        behavior: 'smooth',
+                    });
+                    return;
+                }
+
+                chatHistoryBox.scrollTop = chatHistoryBox.scrollHeight;
+            });
+        }
+
         function applyContactToOffcanvas(contactId) {
             const data = CONTACT_DATA[String(contactId)] || null;
             if (!data) return;
@@ -821,6 +843,7 @@ require_once 'templates/head.php';
             if (chatContactHandle) chatContactHandle.textContent = data.handle || '@contact';
             if (chatContactAvatar) chatContactAvatar.textContent = (data.initials || 'C').toUpperCase();
             renderContactHistory(currentContactId);
+            scrollPaymentChatToLatest();
             setOffcanvasMessage('', '');
         }
 
@@ -907,9 +930,7 @@ require_once 'templates/head.php';
 
         if (chatModal) {
             chatModal.addEventListener('shown.bs.offcanvas', () => {
-                if (chatHistoryBox) {
-                    chatHistoryBox.scrollTop = chatHistoryBox.scrollHeight;
-                }
+                scrollPaymentChatToLatest();
             });
         }
 
@@ -970,6 +991,9 @@ require_once 'templates/head.php';
 
                 if (!currentContactId) {
                     setOffcanvasMessage('error', 'Select a contact before sending payment.');
+                    if (globalNotify) {
+                        globalNotify('Select a contact before sending payment.', { type: 'warning', title: 'Payment Validation' });
+                    }
                     return;
                 }
 
@@ -978,11 +1002,17 @@ require_once 'templates/head.php';
 
                 if (amount <= 0) {
                     setOffcanvasMessage('error', 'Enter a valid amount greater than zero.');
+                    if (globalNotify) {
+                        globalNotify('Enter a valid amount greater than zero.', { type: 'warning', title: 'Payment Validation' });
+                    }
                     return;
                 }
 
                 if (amount > Number(availableGbpBalance || 0)) {
                     setOffcanvasMessage('error', 'Insufficient GBP balance for this payment.');
+                    if (globalNotify) {
+                        globalNotify('Insufficient GBP balance for this payment.', { type: 'error', title: 'Payment Declined' });
+                    }
                     return;
                 }
 
@@ -1007,6 +1037,16 @@ require_once 'templates/head.php';
                     if (!response.ok || !result.success) {
                         const failMessage = result && result.message ? result.message : 'Failed to send payment.';
                         setOffcanvasMessage('error', failMessage);
+                        if (globalNotify) {
+                            globalNotify(failMessage, { type: 'error', title: 'Payment Failed' });
+                        }
+                        window.dispatchEvent(new CustomEvent('finpay:activity', {
+                            detail: {
+                                kind: 'error',
+                                title: 'Payment',
+                                important: true,
+                            }
+                        }));
                         return;
                     }
 
@@ -1043,12 +1083,34 @@ require_once 'templates/head.php';
                     }
 
                     renderContactHistory(currentContactId);
+                    scrollPaymentChatToLatest(true);
                     updateContactRowsFromData();
                     setOffcanvasMessage('success', result.message || 'Payment sent successfully.');
                     playPaymentSuccessVisual();
                     playPaymentSuccessSound();
+                    if (globalNotify) {
+                        globalNotify(result.message || 'Payment sent successfully.', { type: 'success', title: 'Payment Sent' });
+                    }
+                    window.dispatchEvent(new CustomEvent('finpay:activity', {
+                        detail: {
+                            kind: 'success',
+                            title: 'Payment',
+                            message: 'Contact payment completed successfully.',
+                            important: true,
+                        }
+                    }));
                 } catch (error) {
                     setOffcanvasMessage('error', 'Network error while sending payment. Please try again.');
+                    if (globalNotify) {
+                        globalNotify('Network error while sending payment. Please try again.', { type: 'error', title: 'Payment Failed' });
+                    }
+                    window.dispatchEvent(new CustomEvent('finpay:activity', {
+                        detail: {
+                            kind: 'error',
+                            title: 'Payment',
+                            important: true,
+                        }
+                    }));
                 } finally {
                     sendPaymentBtn.disabled = false;
                     sendPaymentBtn.innerHTML = previousHtml;
@@ -1099,6 +1161,9 @@ require_once 'templates/head.php';
                     if (!response.ok || !result.success) {
                         const failMessage = result && result.message ? result.message : 'Failed to add contact.';
                         setFlashMessage('error', failMessage);
+                        if (globalNotify) {
+                            globalNotify(failMessage, { type: 'error', title: 'Contact Save Failed' });
+                        }
                         return;
                     }
 
@@ -1109,6 +1174,9 @@ require_once 'templates/head.php';
                     window.location.reload();
                 } catch (error) {
                     setFlashMessage('error', 'Network error while adding contact. Please try again.');
+                    if (globalNotify) {
+                        globalNotify('Network error while adding contact. Please try again.', { type: 'error', title: 'Contact Save Failed' });
+                    }
                 } finally {
                     submitButton.disabled = false;
                     submitButton.textContent = previousLabel;
