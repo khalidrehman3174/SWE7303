@@ -1,0 +1,158 @@
+[33mcommit 9e6c63ef3c43cbd08b7e6a93b9c516b56aacbb9e[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mdev[m[33m, [m[1;31morigin/dev[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Mon Mar 30 06:13:35 2026 +0100
+
+    Improve activity receiver details and enforce recipient name constraints
+
+[33mcommit 6afb24d5ddbce50782f8c1276bfa9be7de925b70[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Sun Mar 29 21:03:40 2026 +0100
+
+    Implement payments API flow, central GBP balance, offcanvas back handling, and test/docs updates
+
+[33mcommit 3fe82ec6de8cdbd8295bf9e3900d6f2c50b919f5[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Sun Mar 29 19:59:40 2026 +0100
+
+    Made dashboard activity and fiat balances update live without page reload
+    
+    - Added a new deposits activity list API endpoint for realtime dashboard updates.
+    - Updated dashboard activity widgets and all-activity feed to refresh continuously from API data.
+    - Updated total account balance and British Pound primary account values in realtime from completed GBP cashflow.
+    - Ensured right-side asset modal flows reset to their starting state when closed and reopened.
+
+[33mcommit bcf302fe3a1ae250ed85771d7c968510a671d4a4[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Sun Mar 29 07:50:18 2026 +0100
+
+    Refined asset details mobile UX and standardized right-side modal behavior
+    
+    - Improved asset details hero and action button experience, especially on mobile layouts.
+    - Moved mobile focus from market price to holdings in the hero area and repositioned action controls for better usability.
+    - Updated action button styling to align with site-wide button colors and visual language.
+    - Enforced static right-side offcanvas behavior across pages so outside clicks do not dismiss active flows.
+
+[33mcommit 84c156c0773bf00184df11a43940f4af6536f280[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Fri Mar 27 23:37:40 2026 +0000
+
+    Fix Composer strict validation metadata
+    
+    - add required package name and description
+    - set project type and proprietary license
+    - refresh lock file metadata hash to match composer.json
+
+[33mcommit 1dd987281cbf0698feb9e6c2ed3f0e0260f23833[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Fri Mar 27 23:22:46 2026 +0000
+
+    Add deposit test suite and reorganize docs
+    
+    - add comprehensive DepositApiTest integration coverage
+    - fix apple deposit initial state to ensure settlement credit path
+    - add docs/testing-tutorial.md and docs/deposit-test-report.md
+    - move architecture and deployment secrets docs into docs folder
+
+[33mcommit 3ff4b0a9d5a37fc8f76479454f4330821e01f239[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Fri Mar 27 22:58:15 2026 +0000
+
+    Enhance API configuration and user activity handling
+    
+    - Added environment variable support in config.php to differentiate between production and development environments.
+    
+    - Updated index.php to fetch recent and all user activities from the deposits table, with improved SQL queries and error handling.
+    
+    - Implemented dashboard activity functions for better activity display and management.
+    
+    - Created a new deployment-secrets-setup.html file to document deployment processes and required runtime variables for production.
+
+[33mcommit 0c505042e4baf34c80d8d899cbc94a487762f5ba[m
+Author: saamzinc@gmail.com <saamzinc@gmail.com>
+Date:   Fri Mar 27 22:02:26 2026 +0000
+
+    Add deposit architecture and Stripe sandbox deposit API flow
+
+[33mcommit a805c26b1ebacdcf6985c33ba6d58010520d2d3c[m
+Merge: ac2bb40 5642978
+Author: unknown <saamzinc@gmail.com>
+Date:   Thu Mar 26 20:27:06 2026 +0000
+
+    Merge branch 'dev' of https://github.com/khalidrehman3174/SWE7303 into dev
+
+[33mcommit ac2bb40c41559b0ae5b53873c48e25971697451f[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Thu Mar 26 20:24:36 2026 +0000
+
+    UI: unified brand design system + light footer + responsive layout
+    
+    - Add central --brand-accent (#10b981) CSS variable across all pages
+    - Homepage: light footer, simplified CTA banner (headline + single CTA), green body gradient
+    - Auth (login/signup): add subtle green radial gradient to match homepage
+    - User dashboard: unified accent color (#10b981), remove green blob glow, add matching green gradient
+    - Sidebar: replace lightning bolt with finpay dot-logo, add dynamic username + logout link
+    - Responsive: footer grid collapses to 2-col on tablet, 1-col on mobile
+    - Remove duplicate closing footer tag
+
+[33mcommit 801ea473fbf3eba10cca182784cb6cc7ce6611c9[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Thu Mar 26 07:13:43 2026 +0000
+
+    Homepage UI Overhaul: Elite Security Block & Brutalist Mobile Enhancements
+
+[33mcommit 56429784f95ef775235a4769b0b14b9a6ccde4e2[m
+Author: Samuel Onyekwere <saamzinc@gmail.com>
+Date:   Wed Mar 25 21:02:14 2026 +0000
+
+    Add PHP Composer workflow for CI
+    
+    Set up GitHub Actions workflow for PHP Composer to validate and install dependencies.
+
+[33mcommit f968182e96cf7d701d01ad698817a5b30964583f[m
+Merge: e01c288 2fa2580
+Author: unknown <saamzinc@gmail.com>
+Date:   Wed Mar 25 20:58:11 2026 +0000
+
+    Merge branch 'dev' of https://github.com/khalidrehman3174/SWE7303 into dev
+
+[33mcommit e01c288581ec8936b4ecb026e0daa05c838357c4[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Wed Mar 25 20:57:22 2026 +0000
+
+    Refactor Add Money Modal and Activity Layout
+
+[33mcommit 2fa25803a12712fae926b3711cc2a6c4abd6fded[m
+Author: khalidrehman3174 <khalid.rehman3174@gmail.com>
+Date:   Wed Mar 25 02:19:06 2026 +0000
+
+    feat: Add Dockerfile, docker-compose, buildspec and health check endpoint
+
+[33mcommit efafbd265a9c4b83b5d04a218215ac517700e2fb[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Tue Mar 24 19:38:43 2026 +0000
+
+    Refactor Assets, Swap, and Payment UI
+
+[33mcommit b39d1e8d3d2368ea602f6b891c9739801cdab847[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Tue Mar 24 18:22:10 2026 +0000
+
+    Redesign payments page and centralize user dashboard templates
+
+[33mcommit 34f10e2ee97fd8391482063202ed949e13a2e71d[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Tue Mar 24 06:07:28 2026 +0000
+
+    feat(ui): redesign of FinPay user dashboard and standalone cards page
+
+[33mcommit c2aebbc9fa1c57d8cb5551db4284ebd4067832f5[m[33m ([m[1;31morigin/master[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Mon Mar 16 20:12:39 2026 +0000
+
+    feat: migrate auth, add phpunit setup, and rename to FinPay
+
+[33mcommit 120d74f4e7086cf682f0faf999afa1630a58d124[m
+Author: unknown <saamzinc@gmail.com>
+Date:   Mon Mar 16 19:39:02 2026 +0000
+
+    Initialize FinPay as root repository
