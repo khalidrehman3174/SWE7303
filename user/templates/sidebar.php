@@ -10,7 +10,7 @@
             <a href="payments.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'payments') ? 'active' : ''; ?>"><i class="fas fa-paper-plane"></i> Payments</a>
             <a href="assets.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'assets') ? 'active' : ''; ?>"><i class="fas fa-wallet"></i> Assets</a>
             <a href="cards.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'cards') ? 'active' : ''; ?>"><i class="fas fa-credit-card"></i> Cards</a>
-            <a href="cards.php#account-security" class="nav-link-pro"><i class="fas fa-shield-alt"></i> Security</a>
+            <a href="account-security.php" class="nav-link-pro <?php echo (isset($activePage) && $activePage == 'security') ? 'active' : ''; ?>"><i class="fas fa-shield-alt"></i> Security</a>
         </nav>
 
         <!-- User profile + logout -->
@@ -31,7 +31,12 @@
                 ?>
                 <img src="https://ui-avatars.com/api/?name=<?php echo urlencode($display_name); ?>&background=00d26a&color=fff&bold=true" alt="<?php echo $display_name; ?>" style="width: 38px; height: 38px; border-radius: 12px; flex-shrink:0;">
                 <div style="min-width: 0;">
-                    <div style="font-weight: 700; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?php echo $display_name; ?></div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <div style="font-weight: 700; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?php echo $display_name; ?></div>
+                        <button type="button" class="js-theme-swap" style="width:28px; height:28px; border-radius:9px; border:1px solid var(--border-light); background:var(--bg-surface); color:var(--text-primary); display:flex; align-items:center; justify-content:center; padding:0; flex-shrink:0;" aria-label="Swap theme">
+                            <i class="fas fa-moon" style="font-size:0.78rem;"></i>
+                        </button>
+                    </div>
                     <div style="font-size: 0.78rem; color: var(--text-secondary); font-weight: 500;">Pro Member</div>
                 </div>
             </div>

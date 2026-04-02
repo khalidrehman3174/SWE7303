@@ -75,6 +75,54 @@ if(!isset($pageTitle)) $pageTitle = 'FinPay Pro';
             }
         }
 
+        html[data-user-theme="light"] {
+            color-scheme: light;
+            --bg-body: #f4f5f7;
+            --bg-surface: #ffffff;
+            --bg-surface-light: #f9fafb;
+            --text-primary: #111827;
+            --text-secondary: #6b7280;
+            --accent: #10b981;
+            --accent-glow: rgba(16,185,129,0.12);
+            --border-light: rgba(0, 0, 0, 0.08);
+            --glass-grad: linear-gradient(180deg, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0.4) 100%);
+            --sidebar-bg: rgba(255, 255, 255, 0.85);
+            --hover-bg: rgba(0, 0, 0, 0.03);
+            --active-bg: rgba(0, 0, 0, 0.06);
+            --header-bg: rgba(244, 245, 247, 0.6);
+            --btn-primary-bg: #111827;
+            --btn-primary-color: #ffffff;
+            --list-bg: rgba(0, 0, 0, 0.02);
+            --asset-hover: rgba(0, 0, 0, 0.03);
+            --asset-border: rgba(0, 0, 0, 0.05);
+            --icon-bg-default: rgba(0, 0, 0, 0.05);
+            --bottom-nav-bg: rgba(255, 255, 255, 0.95);
+        }
+
+        html[data-user-theme="dark"] {
+            color-scheme: dark;
+            --bg-body: #050507;
+            --bg-surface: #101014;
+            --bg-surface-light: #1a1a20;
+            --text-primary: #ffffff;
+            --text-secondary: #8a8d93;
+            --accent: #10b981;
+            --accent-glow: rgba(16, 185, 129, 0.2);
+            --border-light: rgba(255, 255, 255, 0.08);
+            --glass-grad: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            --sidebar-bg: rgba(16, 16, 20, 0.6);
+            --hover-bg: rgba(255, 255, 255, 0.03);
+            --active-bg: rgba(255, 255, 255, 0.05);
+            --header-bg: rgba(5, 5, 7, 0.5);
+            --btn-primary-bg: #ffffff;
+            --btn-primary-color: #050507;
+            --list-bg: rgba(255, 255, 255, 0.02);
+            --asset-hover: rgba(255, 255, 255, 0.04);
+            --asset-border: rgba(255, 255, 255, 0.03);
+            --icon-bg-default: rgba(255, 255, 255, 0.08);
+            --bottom-nav-bg: rgba(10, 10, 14, 0.85);
+        }
+
         /* Body: same subtle green glow as homepage — unified brand feel */
         body { background-color: var(--bg-body); color: var(--text-primary); font-family: 'Outfit', sans-serif; -webkit-font-smoothing: antialiased; margin: 0; padding: 0; overflow-x: hidden; background-image: radial-gradient(ellipse at 50% 0%, rgba(16,185,129,0.07) 0%, transparent 55%), radial-gradient(ellipse at 90% 0%, rgba(16,185,129,0.04) 0%, transparent 45%); }
         ::-webkit-scrollbar { width: 6px; }
@@ -197,6 +245,48 @@ if(!isset($pageTitle)) $pageTitle = 'FinPay Pro';
     </style>
     <script>
         document.addEventListener('DOMContentLoaded', function () {
+            var USER_THEME_KEY = 'finpay_user_theme';
+
+            function getCurrentTheme() {
+                var stored = localStorage.getItem(USER_THEME_KEY);
+                if (stored === 'light' || stored === 'dark') {
+                    return stored;
+                }
+                return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+
+            function applyTheme(theme) {
+                var normalized = theme === 'dark' ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-user-theme', normalized);
+                localStorage.setItem(USER_THEME_KEY, normalized);
+
+                document.querySelectorAll('.js-theme-swap').forEach(function (btn) {
+                    btn.setAttribute('data-theme', normalized);
+                    btn.setAttribute('aria-label', normalized === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+
+                    var icon = btn.querySelector('i');
+                    if (icon) {
+                        icon.classList.remove('fa-sun', 'fa-moon');
+                        icon.classList.add(normalized === 'dark' ? 'fa-sun' : 'fa-moon');
+                    }
+
+                    var textNode = btn.querySelector('.js-theme-swap-text');
+                    if (textNode) {
+                        textNode.textContent = normalized === 'dark' ? 'Light mode' : 'Dark mode';
+                    }
+                });
+            }
+
+            var initialTheme = getCurrentTheme();
+            applyTheme(initialTheme);
+
+            document.querySelectorAll('.js-theme-swap').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var current = document.documentElement.getAttribute('data-user-theme') === 'dark' ? 'dark' : 'light';
+                    applyTheme(current === 'dark' ? 'light' : 'dark');
+                });
+            });
+
             if (!window.bootstrap || !window.bootstrap.Offcanvas) {
                 return;
             }
