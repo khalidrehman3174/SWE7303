@@ -151,7 +151,7 @@ require_once 'templates/head.php';
                     <div class="asset-icon" style="background: rgba(245, 158, 11, 0.1); color: #f59e0b; border-radius: 12px;"><i class="fab fa-bitcoin"></i></div>
                     <div class="asset-info ml-3">
                         <div class="asset-name" style="font-size: 1.05rem;">Bitcoin <span style="font-size: 0.7rem; background: var(--hover-bg); padding: 3px 8px; border-radius: 6px; margin-left: 5px;">BTC</span></div>
-                        <div class="asset-sub">£53,420.50</div>
+                        <div class="asset-sub" id="price-bitcoin">£53,420.50</div>
                     </div>
                     <div class="asset-value text-end">
                         <button class="btn btn-sm" style="background: var(--text-primary); color: var(--bg-body); border-radius: 100px; padding: 6px 16px; font-weight: 600; font-family: 'Outfit'; text-transform: uppercase;">Buy</button>
@@ -202,3 +202,21 @@ require_once 'templates/head.php';
 
 </body>
 </html>
+<script>
+fetch('/api/v1/crypto/prices.php')
+  .then(response => response.json())
+  .then(data => {
+    const formatGBP = value => '£' + Number(value).toLocaleString('en-GB', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+
+    const bitcoinEl = document.getElementById('price-bitcoin');
+    if (bitcoinEl && data.bitcoin?.gbp !== undefined) {
+      bitcoinEl.textContent = formatGBP(data.bitcoin.gbp);
+    }
+  })
+  .catch(error => {
+    console.error('Crypto API error:', error);
+  });
+</script>
