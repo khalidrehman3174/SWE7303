@@ -210,6 +210,28 @@ $gbpAmount = (float)($gbpBalancePayload['amount'] ?? 0.0);
                         <button class="btn btn-sm" style="background: var(--text-primary); color: var(--bg-body); border-radius: 100px; padding: 6px 16px; font-weight: 600; font-family: 'Outfit'; text-transform: uppercase;">Buy</button>
                     </div>
                 </div>
+
+                <div class="asset-row px-0 border-bottom" style="padding: 1rem 0 !important; border-radius: 0; border-bottom: 1px solid var(--border-light) !important;">
+                    <div class="asset-icon" style="background: rgba(38, 161, 123, 0.1); color: #26A17B; border-radius: 12px;"><i class="fas fa-coins"></i></div>
+                    <div class="asset-info ml-3">
+                        <div class="asset-name" style="font-size: 1.05rem;">Tether <span style="font-size: 0.7rem; background: var(--hover-bg); padding: 3px 8px; border-radius: 6px; margin-left: 5px;">USDT</span></div>
+                        <div id="usdtModalPriceText" class="asset-sub">£0.00</div>
+                    </div>
+                    <div class="asset-value text-end">
+                        <button class="btn btn-sm" style="background: var(--text-primary); color: var(--bg-body); border-radius: 100px; padding: 6px 16px; font-weight: 600; font-family: 'Outfit'; text-transform: uppercase;">Buy</button>
+                    </div>
+                </div>
+
+                <div class="asset-row px-0" style="padding: 1rem 0 !important; border-radius: 0; border: none;">
+                    <div class="asset-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; border-radius: 12px;"><i class="fas fa-water"></i></div>
+                    <div class="asset-info ml-3">
+                        <div class="asset-name" style="font-size: 1.05rem;">Ripple <span style="font-size: 0.7rem; background: var(--hover-bg); padding: 3px 8px; border-radius: 6px; margin-left: 5px;">XRP</span></div>
+                        <div id="xrpModalPriceText" class="asset-sub">£0.00</div>
+                    </div>
+                    <div class="asset-value text-end">
+                        <button class="btn btn-sm" style="background: var(--text-primary); color: var(--bg-body); border-radius: 100px; padding: 6px 16px; font-weight: 600; font-family: 'Outfit'; text-transform: uppercase;">Buy</button>
+                    </div>
+                </div>
             </div>
             
         </div>
@@ -262,7 +284,7 @@ $gbpAmount = (float)($gbpBalancePayload['amount'] ?? 0.0);
                 el.innerHTML = '<i class="fas ' + (positive ? 'fa-arrow-up' : 'fa-arrow-down') + ' me-1" style="font-size: 0.75rem;"></i>' + (positive ? '+' : '') + value.toFixed(2) + '%';
             }
 
-            var trendUniverse = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE'];
+            var trendUniverse = ['BTC', 'ETH', 'USDT', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE'];
             var trendMeta = {
                 BTC: { name: 'Bitcoin', icon: 'fab fa-bitcoin', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)' },
                 ETH: { name: 'Ethereum', icon: 'fab fa-ethereum', color: '#6366f1', bg: 'rgba(99, 102, 241, 0.1)' },
@@ -326,8 +348,10 @@ $gbpAmount = (float)($gbpBalancePayload['amount'] ?? 0.0);
             function applyMarket(prices) {
                 var btcPrice = Number((prices.BTC && prices.BTC.GBP && prices.BTC.GBP.PRICE) || 0);
                 var ethPrice = Number((prices.ETH && prices.ETH.GBP && prices.ETH.GBP.PRICE) || 0);
+                var usdtPrice = Number((prices.USDT && prices.USDT.GBP && prices.USDT.GBP.PRICE) || 0);
                 var btcPct = Number((prices.BTC && prices.BTC.GBP && prices.BTC.GBP.CHANGEPCT24HOUR) || 0);
                 var ethPct = Number((prices.ETH && prices.ETH.GBP && prices.ETH.GBP.CHANGEPCT24HOUR) || 0);
+                var xrpPrice = Number((prices.XRP && prices.XRP.GBP && prices.XRP.GBP.PRICE) || 0);
 
                 var btcValue = portfolio.BTC * btcPrice;
                 var ethValue = portfolio.ETH * ethPrice;
@@ -351,6 +375,10 @@ $gbpAmount = (float)($gbpBalancePayload['amount'] ?? 0.0);
                 if (btcModalPriceText) btcModalPriceText.textContent = formatGBP(btcPrice);
                 var ethModalPriceText = document.getElementById('ethModalPriceText');
                 if (ethModalPriceText) ethModalPriceText.textContent = formatGBP(ethPrice);
+                var usdtModalPriceText = document.getElementById('usdtModalPriceText');
+                if (usdtModalPriceText) usdtModalPriceText.textContent = formatGBP(usdtPrice);
+                var xrpModalPriceText = document.getElementById('xrpModalPriceText');
+                if (xrpModalPriceText) xrpModalPriceText.textContent = formatGBP(xrpPrice);
 
                 setChangeText('btcChangeText', btcPct);
                 setChangeText('ethChangeText', ethPct);
