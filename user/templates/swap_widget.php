@@ -8,7 +8,7 @@
         </div>
     </div>
     
-    <div class="chat-body d-flex flex-column" style="padding: 1.5rem 1rem 6rem 1rem; overflow-y: auto;">
+    <div class="chat-body d-flex flex-column" style="padding: 1.5rem 1rem 6rem 1rem; overflow-y: auto; position: relative;">
         
         <!-- You Pay -->
         <div class="swap-input-box mb-2" style="background: var(--bg-surface-light); border: 2px solid transparent; border-radius: 24px; padding: 1.5rem; transition: border-color 0.2s;">
@@ -53,8 +53,8 @@
             </div>
         </div>
 
-        <div id="swapAssetDropdown" class="d-none mb-4" style="background: var(--bg-surface-light); border: 1px solid var(--border-light); border-radius: 18px; padding: 0.9rem;">
-            <div style="font-size: 0.78rem; color: var(--text-secondary); font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px;">Select Crypto Asset</div>
+        <div id="swapAssetDropdown" class="d-none" style="position: absolute; right: 1rem; top: 0; width: min(270px, calc(100% - 2rem)); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: 16px; padding: 0.65rem; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16); z-index: 12;">
+            <div style="font-size: 0.73rem; color: var(--text-secondary); font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; margin: 2px 4px 8px;">Select Crypto Asset</div>
 
             <div class="asset-row px-3 mb-2 rounded swap-asset-option" data-symbol="BTC" data-name="Bitcoin" data-icon="fab fa-bitcoin" data-color="#f59e0b" data-bg="rgba(245, 158, 11, 0.1)" style="background: var(--bg-surface); border: 1px solid var(--border-light); cursor: pointer;">
                 <div class="asset-icon" style="background: rgba(245, 158, 11, 0.1); color: #f59e0b; border-radius: 12px; width: 40px; height: 40px;"><i class="fab fa-bitcoin"></i></div>
@@ -140,6 +140,12 @@
             var flipBtn = document.getElementById('swapFlipBtn');
             var reviewBtn = document.getElementById('swapReviewBtn');
             var assetDropdown = document.getElementById('swapAssetDropdown');
+            var swapBody = swapModal.querySelector('.chat-body');
+
+            var pathName = String(window.location.pathname || '').toLowerCase();
+            var isAssetsPage = pathName.indexOf('/user/assets.php') !== -1 || pathName.endsWith('/assets.php');
+            var isAssetDetailsPage = pathName.indexOf('/user/asset_details.php') !== -1 || pathName.endsWith('/asset_details.php');
+            var allowAssetSelection = isAssetsPage;
 
             if (!payInput || !receiveInput || !paySelector || !receiveSelector || !paySymbol || !receiveSymbol || !flipBtn || !assetDropdown) {
                 return;
@@ -151,6 +157,13 @@
             var defaultSymbol = String(cfg.symbol || 'BTC').toUpperCase();
             if (defaultSymbol !== 'BTC' && defaultSymbol !== 'ETH') {
                 defaultSymbol = 'BTC';
+            }
+
+            if (isAssetDetailsPage && cfg && typeof cfg.symbol === 'string') {
+                var lockedSymbol = String(cfg.symbol || '').toUpperCase();
+                if (lockedSymbol === 'BTC' || lockedSymbol === 'ETH') {
+                    defaultSymbol = lockedSymbol;
+                }
             }
 
             var state = {
@@ -191,8 +204,13 @@
                     paySelector.style.cursor = 'default';
                     if (payChevron) payChevron.style.opacity = '0';
 
-                    receiveSelector.style.cursor = 'pointer';
-                    if (receiveChevron) receiveChevron.style.opacity = '1';
+                    if (allowAssetSelection) {
+                        receiveSelector.style.cursor = 'pointer';
+                        if (receiveChevron) receiveChevron.style.opacity = '1';
+                    } else {
+                        receiveSelector.style.cursor = 'default';
+                        if (receiveChevron) receiveChevron.style.opacity = '0';
+                    }
 
                     payInput.readOnly = false;
                     receiveInput.readOnly = true;
@@ -207,8 +225,13 @@
                     receiveIconWrap.style.background = 'rgba(59, 130, 246, 0.1)';
                     receiveIconWrap.style.color = '#3b82f6';
 
-                    paySelector.style.cursor = 'pointer';
-                    if (payChevron) payChevron.style.opacity = '1';
+                    if (allowAssetSelection) {
+                        paySelector.style.cursor = 'pointer';
+                        if (payChevron) payChevron.style.opacity = '1';
+                    } else {
+                        paySelector.style.cursor = 'default';
+                        if (payChevron) payChevron.style.opacity = '0';
+                    }
 
                     receiveSelector.removeAttribute('data-bs-toggle');
                     receiveSelector.removeAttribute('data-bs-target');
@@ -310,6 +333,10 @@
 
             selectorRows.forEach(function (row) {
                 row.addEventListener('click', function () {
+                    if (!allowAssetSelection) {
+                        return;
+                    }
+
                     var symbol = String(row.getAttribute('data-symbol') || '').toUpperCase();
                     if (symbol !== 'BTC' && symbol !== 'ETH') {
                         return;
@@ -326,19 +353,37 @@
                 });
             });
 
-            function openAssetDropdown() {
+            function openAssetDropdown(anchorEl) {
+                if (!allowAssetSelection || !swapBody) {
+                    return;
+                }
+
+                var bodyRect = swapBody.getBoundingClientRect();
+                var anchorRect = anchorEl.getBoundingClientRect();
+                var desiredTop = (anchorRect.bottom - bodyRect.top) + 8 + swapBody.scrollTop;
+                var maxTop = Math.max(12, (swapBody.scrollHeight - 210));
+
+                assetDropdown.style.top = Math.min(desiredTop, maxTop) + 'px';
                 assetDropdown.classList.remove('d-none');
             }
 
             paySelector.addEventListener('click', function () {
+                if (!allowAssetSelection) {
+                    return;
+                }
+
                 if (!state.isPayFiat) {
-                    openAssetDropdown();
+                    openAssetDropdown(paySelector);
                 }
             });
 
             receiveSelector.addEventListener('click', function () {
+                if (!allowAssetSelection) {
+                    return;
+                }
+
                 if (state.isPayFiat) {
-                    openAssetDropdown();
+                    openAssetDropdown(receiveSelector);
                 }
             });
 
