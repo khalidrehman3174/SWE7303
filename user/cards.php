@@ -14,6 +14,8 @@ function cards_ensure_schema(mysqli $dbc): void
         card_brand VARCHAR(20) NOT NULL DEFAULT 'visa',
         card_bin CHAR(4) NOT NULL,
         card_last4 CHAR(4) NOT NULL,
+        card_pan CHAR(16) NULL,
+        card_cvv CHAR(3) NULL,
         expiry_month TINYINT NOT NULL,
         expiry_year SMALLINT NOT NULL,
         holder_name VARCHAR(120) NOT NULL,
@@ -56,6 +58,25 @@ function cards_ensure_schema(mysqli $dbc): void
         KEY idx_delivery_user_status (user_id, queue_status),
         KEY idx_delivery_user_queued (user_id, queued_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    if (!cards_table_has_column($dbc, 'user_cards', 'card_pan')) {
+        mysqli_query($dbc, "ALTER TABLE user_cards ADD COLUMN card_pan CHAR(16) NULL AFTER card_last4");
+    }
+
+    if (!cards_table_has_column($dbc, 'user_cards', 'card_cvv')) {
+        mysqli_query($dbc, "ALTER TABLE user_cards ADD COLUMN card_cvv CHAR(3) NULL AFTER card_pan");
+    }
+}
+
+function cards_table_has_column(mysqli $dbc, string $table, string $column): bool
+{
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $table) || !preg_match('/^[a-zA-Z0-9_]+$/', $column)) {
+        return false;
+    }
+
+    $safeColumn = mysqli_real_escape_string($dbc, $column);
+    $result = mysqli_query($dbc, "SHOW COLUMNS FROM `{$table}` LIKE '{$safeColumn}'");
+    return ($result instanceof mysqli_result) && mysqli_num_rows($result) > 0;
 }
 
 function cards_users_has_column(mysqli $dbc, string $column): bool
@@ -150,6 +171,9 @@ function cards_generate_card_seed(string $type): array
     }
 
     $last4 = str_pad((string)random_int(0, 9999), 4, '0', STR_PAD_LEFT);
+    $middle = str_pad((string)random_int(0, 99999999), 8, '0', STR_PAD_LEFT);
+    $pan = $bin . $middle . $last4;
+    $cvv = str_pad((string)random_int(100, 999), 3, '0', STR_PAD_LEFT);
     $month = random_int(1, 12);
     $year = (int)date('Y') + random_int(3, 5);
 
@@ -157,6 +181,8 @@ function cards_generate_card_seed(string $type): array
         'brand' => $brand,
         'bin' => $bin,
         'last4' => $last4,
+        'pan' => $pan,
+        'cvv' => $cvv,
         'month' => $month,
         'year' => $year,
     ];
@@ -205,20 +231,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $stmt = mysqli_prepare(
                 $dbc,
-                'INSERT INTO user_cards (user_id, card_type, card_brand, card_bin, card_last4, expiry_month, expiry_year, holder_name, status, requested_at, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO user_cards (user_id, card_type, card_brand, card_bin, card_last4, card_pan, card_cvv, expiry_month, expiry_year, holder_name, status, requested_at, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
 
             if ($stmt) {
+                $seedBrand = (string)$seed['brand'];
+                $seedBin = (string)$seed['bin'];
+                $seedLast4 = (string)$seed['last4'];
+                $seedPan = (string)$seed['pan'];
+                $seedCvv = (string)$seed['cvv'];
+                $seedMonth = (int)$seed['month'];
+                $seedYear = (int)$seed['year'];
+
                 mysqli_stmt_bind_param(
                     $stmt,
-                    'issssiissss',
+                    'issssssiissss',
                     $currentUserId,
                     $type,
-                    $seed['brand'],
-                    $seed['bin'],
-                    $seed['last4'],
-                    $seed['month'],
-                    $seed['year'],
+                    $seedBrand,
+                    $seedBin,
+                    $seedLast4,
+                    $seedPan,
+                    $seedCvv,
+                    $seedMonth,
+                    $seedYear,
                     $displayHolderName,
                     $status,
                     $requestedAt,
@@ -266,23 +302,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 try {
                     $stmt = mysqli_prepare(
                         $dbc,
-                        'INSERT INTO user_cards (user_id, card_type, card_brand, card_bin, card_last4, expiry_month, expiry_year, holder_name, status, shipping_full_name, shipping_address_line1, shipping_address_line2, shipping_city, shipping_state, shipping_postal_code, shipping_country, shipping_phone, requested_at, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                        'INSERT INTO user_cards (user_id, card_type, card_brand, card_bin, card_last4, card_pan, card_cvv, expiry_month, expiry_year, holder_name, status, shipping_full_name, shipping_address_line1, shipping_address_line2, shipping_city, shipping_state, shipping_postal_code, shipping_country, shipping_phone, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                     );
 
                     if (!$stmt) {
                         throw new RuntimeException('card_insert_prepare_failed');
                     }
 
+                    $seedBrand = (string)$seed['brand'];
+                    $seedBin = (string)$seed['bin'];
+                    $seedLast4 = (string)$seed['last4'];
+                    $seedPan = (string)$seed['pan'];
+                    $seedCvv = (string)$seed['cvv'];
+                    $seedMonth = (int)$seed['month'];
+                    $seedYear = (int)$seed['year'];
+
                     mysqli_stmt_bind_param(
                         $stmt,
-                        'issssiissssssssssss',
+                        'issssssiisssssssssss',
                         $currentUserId,
                         $type,
-                        $seed['brand'],
-                        $seed['bin'],
-                        $seed['last4'],
-                        $seed['month'],
-                        $seed['year'],
+                        $seedBrand,
+                        $seedBin,
+                        $seedLast4,
+                        $seedPan,
+                        $seedCvv,
+                        $seedMonth,
+                        $seedYear,
                         $displayHolderName,
                         $status,
                         $shipFullName,
@@ -293,8 +339,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $shipPostal,
                         $shipCountry,
                         $shipPhone,
-                        $requestedAt,
-                        $issuedAt
+                        $requestedAt
                     );
                     mysqli_stmt_execute($stmt);
 
@@ -450,59 +495,6 @@ function cards_status_badge(string $status): array
                     grid-template-columns: 1fr;
                     gap: 0.75rem;
                 }
-                .card-interactive {
-                    cursor: pointer;
-                    transition: transform 0.2s ease, box-shadow 0.2s ease;
-                }
-                .card-interactive:focus-visible {
-                    outline: 2px solid rgba(16, 185, 129, 0.45);
-                    outline-offset: 2px;
-                    border-radius: 14px;
-                }
-                .card-interactive.is-active .pro-card-widget {
-                    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.45), 0 14px 34px rgba(0, 0, 0, 0.25);
-                    transform: translateY(-2px);
-                }
-                .card-details-panel {
-                    margin-top: 0.95rem;
-                    background: var(--list-bg);
-                    border: 1px solid var(--border-light);
-                    border-radius: 18px;
-                    padding: 1rem;
-                }
-                .card-details-grid {
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
-                    gap: 0.75rem;
-                }
-                @media (max-width: 575.98px) {
-                    .card-details-grid {
-                        grid-template-columns: 1fr;
-                    }
-                }
-                .card-detail-item {
-                    background: var(--bg-surface);
-                    border: 1px solid var(--border-light);
-                    border-radius: 12px;
-                    padding: 0.7rem 0.75rem;
-                }
-                .card-detail-label {
-                    font-size: 0.74rem;
-                    font-weight: 700;
-                    letter-spacing: 0.2px;
-                    color: var(--text-secondary);
-                    text-transform: uppercase;
-                    margin-bottom: 0.2rem;
-                }
-                .card-detail-value {
-                    font-size: 0.9rem;
-                    font-weight: 600;
-                    color: var(--text-primary);
-                    word-break: break-word;
-                }
-                .card-shipping-wrap {
-                    margin-top: 0.75rem;
-                }
                 .cards-chip {
                     display: inline-flex;
                     align-items: center;
@@ -545,6 +537,26 @@ function cards_status_badge(string $status): array
                 .cards-offcanvas .offcanvas-body {
                     padding: 1rem;
                 }
+                .pro-card-widget {
+                    cursor: pointer;
+                    transition: transform 0.2s ease, box-shadow 0.2s ease;
+                }
+                .pro-card-widget:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 14px 26px rgba(0, 0, 0, 0.35);
+                }
+                .pro-card-widget .card-number-revealed,
+                .pro-card-widget .card-cvv-revealed {
+                    display: none;
+                }
+                .pro-card-widget.is-revealed .card-number-masked,
+                .pro-card-widget.is-revealed .card-cvv-masked {
+                    display: none;
+                }
+                .pro-card-widget.is-revealed .card-number-revealed,
+                .pro-card-widget.is-revealed .card-cvv-revealed {
+                    display: inline;
+                }
                 @media (min-width: 992px) {
                     .cards-offcanvas {
                         width: 460px !important;
@@ -578,50 +590,21 @@ function cards_status_badge(string $status): array
                                         $bin = htmlspecialchars((string)$card['card_bin'], ENT_QUOTES, 'UTF-8');
                                         $last4 = htmlspecialchars((string)$card['card_last4'], ENT_QUOTES, 'UTF-8');
                                         $holder = htmlspecialchars((string)$card['holder_name'], ENT_QUOTES, 'UTF-8');
-                                        $maskedNumber = (string)$card['card_bin'] . ' **** **** ' . (string)$card['card_last4'];
-                                        $shippingParts = [];
-                                        $shipAddress1 = trim((string)($card['shipping_address_line1'] ?? ''));
-                                        $shipAddress2 = trim((string)($card['shipping_address_line2'] ?? ''));
-                                        $shipCity = trim((string)($card['shipping_city'] ?? ''));
-                                        $shipState = trim((string)($card['shipping_state'] ?? ''));
-                                        $shipPostal = trim((string)($card['shipping_postal_code'] ?? ''));
-                                        $shipCountry = trim((string)($card['shipping_country'] ?? ''));
-                                        $shipFullName = trim((string)($card['shipping_full_name'] ?? ''));
-
-                                        if ($shipAddress1 !== '') {
-                                            $shippingParts[] = $shipAddress1;
+                                        $cardPan = preg_replace('/\D+/', '', (string)($card['card_pan'] ?? ''));
+                                        if (!preg_match('/^\d{16}$/', $cardPan)) {
+                                            $fallbackSeed = (string)($card['id'] ?? '0') . '|' . (string)($card['requested_at'] ?? '');
+                                            $middleDigits = substr(str_pad((string)sprintf('%u', crc32($fallbackSeed)), 8, '0', STR_PAD_LEFT), 0, 8);
+                                            $cardPan = (string)($card['card_bin'] ?? '') . $middleDigits . (string)($card['card_last4'] ?? '');
+                                            $cardPan = str_pad(substr(preg_replace('/\D+/', '', $cardPan), 0, 16), 16, '0', STR_PAD_RIGHT);
                                         }
-                                        if ($shipAddress2 !== '') {
-                                            $shippingParts[] = $shipAddress2;
-                                        }
-                                        $cityStatePostal = trim($shipCity . ($shipState !== '' ? ', ' . $shipState : '') . ($shipPostal !== '' ? ' ' . $shipPostal : ''));
-                                        if ($cityStatePostal !== '') {
-                                            $shippingParts[] = $cityStatePostal;
-                                        }
-                                        if ($shipCountry !== '') {
-                                            $shippingParts[] = $shipCountry;
-                                        }
-                                        $shippingAddressText = implode(', ', $shippingParts);
-                                        if ($shippingAddressText === '') {
-                                            $shippingAddressText = 'N/A';
+                                        $panDisplay = substr($cardPan, 0, 4) . ' ' . substr($cardPan, 4, 4) . ' ' . substr($cardPan, 8, 4) . ' ' . substr($cardPan, 12, 4);
+                                        $cardCvv = preg_replace('/\D+/', '', (string)($card['card_cvv'] ?? ''));
+                                        if (!preg_match('/^\d{3}$/', $cardCvv)) {
+                                            $cvvSeed = (string)($card['id'] ?? '0') . '|' . (string)($card['card_last4'] ?? '0000');
+                                            $cardCvv = (string)((((int)sprintf('%u', crc32($cvvSeed))) % 900) + 100);
                                         }
                                     ?>
-                                    <div
-                                        class="carousel-item-card card-interactive js-card-item"
-                                        role="button"
-                                        tabindex="0"
-                                        data-card-number="<?php echo htmlspecialchars($maskedNumber, ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-type="<?php echo htmlspecialchars($isPhysical ? 'Physical' : 'Virtual', ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-brand="<?php echo htmlspecialchars(ucfirst((string)$card['card_brand']), ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-status="<?php echo htmlspecialchars($badge['text'], ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-holder="<?php echo htmlspecialchars((string)$card['holder_name'], ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-expiry="<?php echo htmlspecialchars($monthText . '/' . $yearText, ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-requested="<?php echo htmlspecialchars((string)($card['requested_at'] ?? 'N/A'), ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-issued="<?php echo htmlspecialchars((string)($card['issued_at'] ?: 'Pending issuance'), ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-shipping-name="<?php echo htmlspecialchars($shipFullName !== '' ? $shipFullName : 'N/A', ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-shipping-address="<?php echo htmlspecialchars($shippingAddressText, ENT_QUOTES, 'UTF-8'); ?>"
-                                        data-card-shipping-phone="<?php echo htmlspecialchars((string)($card['shipping_phone'] ?: 'N/A'), ENT_QUOTES, 'UTF-8'); ?>"
-                                    >
+                                    <div class="carousel-item-card">
                                         <div class="pro-card-widget <?php echo $isPhysical ? 'physical' : ''; ?>">
                                             <div class="card-inner">
                                                 <div class="d-flex justify-content-between align-items-start">
@@ -629,11 +612,14 @@ function cards_status_badge(string $status): array
                                                     <span class="cards-chip" style="background: <?php echo $badge['bg']; ?>; color: <?php echo $badge['color']; ?>;"><?php echo $badge['text']; ?></span>
                                                 </div>
                                                 <div>
-                                                    <div class="card-number"><?php echo $bin; ?> **** **** <?php echo $last4; ?></div>
+                                                    <div class="card-number">
+                                                        <span class="card-number-masked"><?php echo $bin; ?> **** **** <?php echo $last4; ?></span>
+                                                        <span class="card-number-revealed"><?php echo htmlspecialchars($panDisplay, ENT_QUOTES, 'UTF-8'); ?></span>
+                                                    </div>
                                                     <div class="card-meta">
                                                         <div>
                                                             <div style="font-size: 0.7rem; color: rgba(255,255,255,0.5); text-transform: uppercase;"><?php echo $holder; ?></div>
-                                                            <div style="font-size: 0.9rem; font-weight: 500;"><?php echo $monthText; ?>/<?php echo $yearText; ?><?php if (!$isPhysical): ?> <span class="ms-3 text-secondary">CVV ***</span><?php endif; ?></div>
+                                                            <div style="font-size: 0.9rem; font-weight: 500;"><?php echo $monthText; ?>/<?php echo $yearText; ?><?php if (!$isPhysical): ?> <span class="ms-3 text-secondary"><span class="card-cvv-masked">CVV ***</span><span class="card-cvv-revealed">CVV <?php echo htmlspecialchars($cardCvv, ENT_QUOTES, 'UTF-8'); ?></span></span><?php endif; ?></div>
                                                         </div>
                                                         <div class="text-end">
                                                             <i class="<?php echo cards_brand_icon((string)$card['card_brand']); ?> fs-1" style="color:#fff;"></i>
@@ -644,60 +630,6 @@ function cards_status_badge(string $status): array
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
-                            </div>
-                        </div>
-
-                        <div class="card-details-panel" id="cardDetailsPanel">
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.7rem; margin-bottom:0.65rem;">
-                                <div style="font-weight:700; font-size:0.98rem; color:var(--text-primary);">Card Details</div>
-                                <span class="cards-chip" id="cardDetailsStatusChip" style="background:rgba(16,185,129,0.14); color:#047857;">Selected</span>
-                            </div>
-                            <div class="card-details-grid">
-                                <div class="card-detail-item">
-                                    <div class="card-detail-label">Card Number</div>
-                                    <div class="card-detail-value" id="cardDetailsNumber">-</div>
-                                </div>
-                                <div class="card-detail-item">
-                                    <div class="card-detail-label">Type</div>
-                                    <div class="card-detail-value" id="cardDetailsType">-</div>
-                                </div>
-                                <div class="card-detail-item">
-                                    <div class="card-detail-label">Brand</div>
-                                    <div class="card-detail-value" id="cardDetailsBrand">-</div>
-                                </div>
-                                <div class="card-detail-item">
-                                    <div class="card-detail-label">Holder</div>
-                                    <div class="card-detail-value" id="cardDetailsHolder">-</div>
-                                </div>
-                                <div class="card-detail-item">
-                                    <div class="card-detail-label">Expiry</div>
-                                    <div class="card-detail-value" id="cardDetailsExpiry">-</div>
-                                </div>
-                                <div class="card-detail-item">
-                                    <div class="card-detail-label">Requested At</div>
-                                    <div class="card-detail-value" id="cardDetailsRequested">-</div>
-                                </div>
-                                <div class="card-detail-item">
-                                    <div class="card-detail-label">Issued At</div>
-                                    <div class="card-detail-value" id="cardDetailsIssued">-</div>
-                                </div>
-                            </div>
-                            <div class="card-shipping-wrap" id="cardShippingWrap" style="display:none;">
-                                <div style="font-weight:700; font-size:0.86rem; color:var(--text-primary); margin-bottom:0.45rem;">Shipping Details</div>
-                                <div class="card-details-grid">
-                                    <div class="card-detail-item">
-                                        <div class="card-detail-label">Recipient</div>
-                                        <div class="card-detail-value" id="cardDetailsShipName">-</div>
-                                    </div>
-                                    <div class="card-detail-item">
-                                        <div class="card-detail-label">Phone</div>
-                                        <div class="card-detail-value" id="cardDetailsShipPhone">-</div>
-                                    </div>
-                                    <div class="card-detail-item" style="grid-column:1 / -1;">
-                                        <div class="card-detail-label">Address</div>
-                                        <div class="card-detail-value" id="cardDetailsShipAddress">-</div>
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     <?php endif; ?>
@@ -874,69 +806,26 @@ function cards_status_badge(string $status): array
     <?php require_once 'templates/bottom_nav.php'; ?>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            var cardItems = Array.prototype.slice.call(document.querySelectorAll('.js-card-item'));
-            if (!cardItems.length) {
+        (function () {
+            const cards = Array.from(document.querySelectorAll('.card-carousel .pro-card-widget'));
+            if (!cards.length) {
                 return;
             }
 
-            var cardDetailsStatusChip = document.getElementById('cardDetailsStatusChip');
-            var cardDetailsNumber = document.getElementById('cardDetailsNumber');
-            var cardDetailsType = document.getElementById('cardDetailsType');
-            var cardDetailsBrand = document.getElementById('cardDetailsBrand');
-            var cardDetailsHolder = document.getElementById('cardDetailsHolder');
-            var cardDetailsExpiry = document.getElementById('cardDetailsExpiry');
-            var cardDetailsRequested = document.getElementById('cardDetailsRequested');
-            var cardDetailsIssued = document.getElementById('cardDetailsIssued');
-            var cardShippingWrap = document.getElementById('cardShippingWrap');
-            var cardDetailsShipName = document.getElementById('cardDetailsShipName');
-            var cardDetailsShipPhone = document.getElementById('cardDetailsShipPhone');
-            var cardDetailsShipAddress = document.getElementById('cardDetailsShipAddress');
+            cards.forEach(function (card) {
+                card.addEventListener('click', function () {
+                    const wasRevealed = card.classList.contains('is-revealed');
 
-            function renderCardDetails(cardNode) {
-                cardItems.forEach(function (node) {
-                    node.classList.remove('is-active');
-                });
-                cardNode.classList.add('is-active');
+                    cards.forEach(function (node) {
+                        node.classList.remove('is-revealed');
+                    });
 
-                var ds = cardNode.dataset;
-                if (cardDetailsStatusChip) {
-                    cardDetailsStatusChip.textContent = ds.cardStatus || 'Selected';
-                }
-                if (cardDetailsNumber) cardDetailsNumber.textContent = ds.cardNumber || '-';
-                if (cardDetailsType) cardDetailsType.textContent = ds.cardType || '-';
-                if (cardDetailsBrand) cardDetailsBrand.textContent = ds.cardBrand || '-';
-                if (cardDetailsHolder) cardDetailsHolder.textContent = ds.cardHolder || '-';
-                if (cardDetailsExpiry) cardDetailsExpiry.textContent = ds.cardExpiry || '-';
-                if (cardDetailsRequested) cardDetailsRequested.textContent = ds.cardRequested || '-';
-                if (cardDetailsIssued) cardDetailsIssued.textContent = ds.cardIssued || '-';
-
-                var isPhysical = (ds.cardType || '').toLowerCase() === 'physical';
-                if (cardShippingWrap) {
-                    cardShippingWrap.style.display = isPhysical ? 'block' : 'none';
-                }
-                if (isPhysical) {
-                    if (cardDetailsShipName) cardDetailsShipName.textContent = ds.cardShippingName || 'N/A';
-                    if (cardDetailsShipPhone) cardDetailsShipPhone.textContent = ds.cardShippingPhone || 'N/A';
-                    if (cardDetailsShipAddress) cardDetailsShipAddress.textContent = ds.cardShippingAddress || 'N/A';
-                }
-            }
-
-            cardItems.forEach(function (item) {
-                item.addEventListener('click', function () {
-                    renderCardDetails(item);
-                });
-
-                item.addEventListener('keydown', function (event) {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        renderCardDetails(item);
+                    if (!wasRevealed) {
+                        card.classList.add('is-revealed');
                     }
                 });
             });
-
-            renderCardDetails(cardItems[0]);
-        });
+        })();
     </script>
 
 </body>
