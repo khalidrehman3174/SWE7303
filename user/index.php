@@ -262,6 +262,71 @@ function dashboard_fetch_withdrawal_activities(mysqli $dbc, int $userId, int $li
     return $items;
 }
 
+function dashboard_fetch_crypto_holdings(mysqli $dbc, int $userId): array
+{
+    if ($userId <= 0 || !finpay_balance_table_exists($dbc, 'wallets')) {
+        return [
+            'count' => 0,
+            'total_units' => 0.0,
+            'holdings' => [],
+        ];
+    }
+
+    $stmt = mysqli_prepare(
+        $dbc,
+        "SELECT UPPER(TRIM(symbol)) AS symbol, COALESCE(SUM(balance), 0) AS total_balance
+         FROM wallets
+         WHERE user_id = ?
+           AND UPPER(TRIM(symbol)) <> 'GBP'
+           AND UPPER(TRIM(symbol)) NOT IN ('XAU', 'XAG', 'XPT')
+         GROUP BY UPPER(TRIM(symbol))
+         HAVING COALESCE(SUM(balance), 0) > 0"
+    );
+
+    if (!$stmt) {
+        return [
+            'count' => 0,
+            'total_units' => 0.0,
+            'holdings' => [],
+        ];
+    }
+
+    mysqli_stmt_bind_param($stmt, 'i', $userId);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    $holdings = [];
+    $totalUnits = 0.0;
+
+    if ($result instanceof mysqli_result) {
+        while ($row = mysqli_fetch_assoc($result)) {
+            $symbol = strtoupper(trim((string)($row['symbol'] ?? '')));
+            $balance = (float)($row['total_balance'] ?? 0.0);
+            if ($symbol === '' || $balance <= 0) {
+                continue;
+            }
+
+            $holdings[] = [
+                'symbol' => $symbol,
+                'balance' => $balance,
+            ];
+            $totalUnits += $balance;
+        }
+    }
+
+    mysqli_stmt_close($stmt);
+
+    usort($holdings, static function (array $a, array $b): int {
+        return $b['balance'] <=> $a['balance'];
+    });
+
+    return [
+        'count' => count($holdings),
+        'total_units' => $totalUnits,
+        'holdings' => $holdings,
+    ];
+}
+
 function dashboard_fetch_contact_payment_activities(mysqli $dbc, int $userId, int $limit): array
 {
     if (!finpay_balance_table_exists($dbc, 'payment_contact_transactions')) {
@@ -617,6 +682,19 @@ $fiatBalanceSign = (string)($fiatBalancePayload['sign'] ?? '');
 $fiatBalanceMajor = (string)($fiatBalancePayload['major'] ?? '0');
 $fiatBalanceMinor = (string)($fiatBalancePayload['minor'] ?? '00');
 
+$dashboardCrypto = ['count' => 0, 'total_units' => 0.0, 'holdings' => []];
+if (isset($dbc, $_SESSION['user_id'])) {
+    $dashboardCrypto = dashboard_fetch_crypto_holdings($dbc, (int)$_SESSION['user_id']);
+}
+
+$dashboardCryptoCount = (int)($dashboardCrypto['count'] ?? 0);
+$dashboardCryptoHoldings = is_array($dashboardCrypto['holdings'] ?? null) ? $dashboardCrypto['holdings'] : [];
+$dashboardCryptoHoldingsJson = json_encode($dashboardCryptoHoldings, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+if (!is_string($dashboardCryptoHoldingsJson) || $dashboardCryptoHoldingsJson === '') {
+    $dashboardCryptoHoldingsJson = '[]';
+}
+$dashboardCryptoCountLabel = $dashboardCryptoCount === 1 ? '1 asset' : (string)$dashboardCryptoCount . ' assets';
+
 $weekDeposits = (float)($analytics['week']['deposits'] ?? 0.0);
 $weekWithdrawals = (float)($analytics['week']['withdrawals'] ?? 0.0);
 $weekNet = (float)($analytics['week']['net'] ?? 0.0);
@@ -701,14 +779,14 @@ require_once 'templates/head.php';
                         
                         <!-- Crypto -->
                         <div class="asset-row">
-                            <div class="asset-icon icon-btc"><i class="fab fa-bitcoin"></i></div>
+                            <div class="asset-icon icon-btc"><i class="fas fa-coins"></i></div>
                             <div class="asset-info">
-                                <div class="asset-name">Bitcoin</div>
-                                <div class="asset-sub">0.1250 BTC</div>
+                                <div class="asset-name">Assets</div>
+                                <div class="asset-sub">Crypto</div>
                             </div>
                             <div class="asset-value">
-                                <div class="asset-price">£8,240.50</div>
-                                <div class="asset-change text-success">+2.4%</div>
+                                <div id="cryptoAssetsGbpValue" class="asset-price">£0.00</div>
+                                <div class="asset-change" style="color: var(--text-secondary);"><?php echo htmlspecialchars($dashboardCryptoCountLabel, ENT_QUOTES, 'UTF-8'); ?></div>
                             </div>
                         </div>
 
@@ -1166,6 +1244,7 @@ require_once 'templates/head.php';
     <script>
         const STRIPE_PUBLISHABLE_KEY = '<?php echo htmlspecialchars($apiConfig['stripe_publishable_key'] ?? '', ENT_QUOTES); ?>';
         const API_BASE_URL = window.FINPAY_API_BASE_URL || '../api/v1';
+        const DASHBOARD_CRYPTO_HOLDINGS = <?php echo $dashboardCryptoHoldingsJson; ?>;
         let ALL_ACTIVITIES = <?php echo json_encode($allActivitiesPayload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
         let selectedMethod = 'bank';
         let activeCardDepositId = null;
@@ -1211,6 +1290,57 @@ require_once 'templates/head.php';
                     important: true,
                 }
             }));
+        }
+
+        function formatCurrencyGbp(amount) {
+            const value = Number(amount || 0);
+            return new Intl.NumberFormat('en-GB', {
+                style: 'currency',
+                currency: 'GBP',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }).format(value);
+        }
+
+        async function refreshDashboardCryptoGbpValue() {
+            const target = document.getElementById('cryptoAssetsGbpValue');
+            if (!target) {
+                return;
+            }
+
+            const holdings = Array.isArray(DASHBOARD_CRYPTO_HOLDINGS) ? DASHBOARD_CRYPTO_HOLDINGS : [];
+            const nonZero = holdings.filter((item) => Number(item && item.balance) > 0 && String(item && item.symbol || '').trim() !== '');
+            if (!nonZero.length) {
+                target.textContent = formatCurrencyGbp(0);
+                return;
+            }
+
+            const symbols = nonZero.map((item) => String(item.symbol).toUpperCase().trim());
+            const uniqueSymbols = Array.from(new Set(symbols));
+
+            try {
+                const response = await fetch('https://min-api.cryptocompare.com/data/pricemultifull?fsyms=' + encodeURIComponent(uniqueSymbols.join(',')) + '&tsyms=GBP');
+                if (!response.ok) {
+                    throw new Error('price_fetch_failed');
+                }
+
+                const payload = await response.json();
+                const raw = payload && payload.RAW ? payload.RAW : {};
+
+                let totalGbp = 0;
+                nonZero.forEach((item) => {
+                    const symbol = String(item.symbol || '').toUpperCase().trim();
+                    const balance = Number(item.balance || 0);
+                    const rate = Number(raw && raw[symbol] && raw[symbol].GBP && raw[symbol].GBP.PRICE || 0);
+                    if (balance > 0 && rate > 0) {
+                        totalGbp += balance * rate;
+                    }
+                });
+
+                target.textContent = formatCurrencyGbp(totalGbp);
+            } catch (error) {
+                target.textContent = formatCurrencyGbp(0);
+            }
         }
 
         async function apiCall(path, method = 'GET', body = null) {
@@ -2078,6 +2208,7 @@ require_once 'templates/head.php';
         }
 
         updateDepositButton();
+        refreshDashboardCryptoGbpValue();
         applyRealtimeAnalytics(computeAnalyticsFromActivities(ALL_ACTIVITIES));
         startActivityRealtimePolling();
 
