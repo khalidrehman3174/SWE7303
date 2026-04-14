@@ -33,6 +33,29 @@ function cards_ensure_schema(mysqli $dbc): void
         KEY idx_user_cards_user_created (user_id, created_at),
         KEY idx_user_cards_user_status (user_id, status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    mysqli_query($dbc, "CREATE TABLE IF NOT EXISTS card_delivery_queue (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        card_id INT NOT NULL,
+        user_id INT NOT NULL,
+        queue_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        shipping_full_name VARCHAR(120) NOT NULL,
+        shipping_address_line1 VARCHAR(140) NOT NULL,
+        shipping_address_line2 VARCHAR(140) NULL,
+        shipping_city VARCHAR(80) NOT NULL,
+        shipping_state VARCHAR(80) NOT NULL,
+        shipping_postal_code VARCHAR(30) NOT NULL,
+        shipping_country VARCHAR(80) NOT NULL,
+        shipping_phone VARCHAR(40) NOT NULL,
+        notes VARCHAR(255) NULL,
+        queued_at DATETIME NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        shipped_at DATETIME NULL,
+        delivered_at DATETIME NULL,
+        UNIQUE KEY uq_delivery_card (card_id),
+        KEY idx_delivery_user_status (user_id, queue_status),
+        KEY idx_delivery_user_queued (user_id, queued_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 }
 
 function cards_users_has_column(mysqli $dbc, string $column): bool
@@ -84,6 +107,37 @@ function cards_fetch_user_cards(mysqli $dbc, int $uid): array
 
     mysqli_stmt_close($stmt);
 
+    return $rows;
+}
+
+function cards_fetch_user_delivery_queue(mysqli $dbc, int $uid): array
+{
+    $rows = [];
+    $stmt = mysqli_prepare(
+        $dbc,
+        'SELECT q.*, c.card_last4, c.card_brand, c.requested_at
+         FROM card_delivery_queue q
+         INNER JOIN user_cards c ON c.id = q.card_id
+         WHERE q.user_id = ?
+         ORDER BY q.queued_at DESC, q.id DESC'
+    );
+    if (!$stmt) {
+        return $rows;
+    }
+
+    mysqli_stmt_bind_param($stmt, 'i', $uid);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    if ($result instanceof mysqli_result) {
+        while ($row = mysqli_fetch_assoc($result)) {
+            if (is_array($row)) {
+                $rows[] = $row;
+            }
+        }
+    }
+
+    mysqli_stmt_close($stmt);
     return $rows;
 }
 
@@ -207,13 +261,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $requestedAt = date('Y-m-d H:i:s');
                 $type = 'physical';
                 $issuedAt = null;
+                mysqli_begin_transaction($dbc);
 
-                $stmt = mysqli_prepare(
-                    $dbc,
-                    'INSERT INTO user_cards (user_id, card_type, card_brand, card_bin, card_last4, expiry_month, expiry_year, holder_name, status, shipping_full_name, shipping_address_line1, shipping_address_line2, shipping_city, shipping_state, shipping_postal_code, shipping_country, shipping_phone, requested_at, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-                );
+                try {
+                    $stmt = mysqli_prepare(
+                        $dbc,
+                        'INSERT INTO user_cards (user_id, card_type, card_brand, card_bin, card_last4, expiry_month, expiry_year, holder_name, status, shipping_full_name, shipping_address_line1, shipping_address_line2, shipping_city, shipping_state, shipping_postal_code, shipping_country, shipping_phone, requested_at, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                    );
 
-                if ($stmt) {
+                    if (!$stmt) {
+                        throw new RuntimeException('card_insert_prepare_failed');
+                    }
+
                     mysqli_stmt_bind_param(
                         $stmt,
                         'issssiissssssssssss',
@@ -238,10 +297,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $issuedAt
                     );
                     mysqli_stmt_execute($stmt);
+
+                    if (mysqli_stmt_affected_rows($stmt) <= 0) {
+                        mysqli_stmt_close($stmt);
+                        throw new RuntimeException('card_insert_failed');
+                    }
+
+                    $cardId = (int)mysqli_insert_id($dbc);
                     mysqli_stmt_close($stmt);
-                    $cardsNotice = 'Physical card request submitted successfully.';
+
+                    $queueStatus = 'pending';
+                    $queueNotes = 'Queued for production and dispatch';
+                    $queueStmt = mysqli_prepare(
+                        $dbc,
+                        'INSERT INTO card_delivery_queue (card_id, user_id, queue_status, shipping_full_name, shipping_address_line1, shipping_address_line2, shipping_city, shipping_state, shipping_postal_code, shipping_country, shipping_phone, notes, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                    );
+
+                    if (!$queueStmt) {
+                        throw new RuntimeException('queue_insert_prepare_failed');
+                    }
+
+                    mysqli_stmt_bind_param(
+                        $queueStmt,
+                        'iisssssssssss',
+                        $cardId,
+                        $currentUserId,
+                        $queueStatus,
+                        $shipFullName,
+                        $shipAddress1,
+                        $shipAddress2,
+                        $shipCity,
+                        $shipState,
+                        $shipPostal,
+                        $shipCountry,
+                        $shipPhone,
+                        $queueNotes,
+                        $requestedAt
+                    );
+                    mysqli_stmt_execute($queueStmt);
+
+                    if (mysqli_stmt_affected_rows($queueStmt) <= 0) {
+                        mysqli_stmt_close($queueStmt);
+                        throw new RuntimeException('queue_insert_failed');
+                    }
+
+                    mysqli_stmt_close($queueStmt);
+                    mysqli_commit($dbc);
+
+                    $cardsNotice = 'Physical card request submitted and added to delivery queue.';
                     $cardsNoticeType = 'success';
-                } else {
+                } catch (Throwable $e) {
+                    mysqli_rollback($dbc);
                     $cardsNotice = 'Could not submit your physical card request right now.';
                     $cardsNoticeType = 'danger';
                 }
@@ -251,6 +357,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $userCards = cards_fetch_user_cards($dbc, $currentUserId);
+$deliveryQueue = cards_fetch_user_delivery_queue($dbc, $currentUserId);
 $hasCards = count($userCards) > 0;
 
 function cards_brand_icon(string $brand): string
@@ -493,17 +600,7 @@ function cards_status_badge(string $status): array
 
                     <div class="section-header" style="margin-top:1.3rem;">Delivery Queue</div>
                     <div class="settings-list">
-                        <?php
-                            $hasProcessing = false;
-                            foreach ($userCards as $card) {
-                                if ((string)$card['card_type'] === 'physical' && strtolower((string)$card['status']) === 'processing') {
-                                    $hasProcessing = true;
-                                    break;
-                                }
-                            }
-                        ?>
-
-                        <?php if (!$hasProcessing): ?>
+                        <?php if (!count($deliveryQueue)): ?>
                             <div class="setting-row">
                                 <div class="d-flex align-items-center gap-3">
                                     <div class="setting-icon"><i class="fas fa-truck"></i></div>
@@ -514,17 +611,28 @@ function cards_status_badge(string $status): array
                                 </div>
                             </div>
                         <?php else: ?>
-                            <?php foreach ($userCards as $card): ?>
-                                <?php if ((string)$card['card_type'] !== 'physical' || strtolower((string)$card['status']) !== 'processing') { continue; } ?>
+                            <?php foreach ($deliveryQueue as $queueItem): ?>
+                                <?php
+                                    $queueStatus = strtolower((string)($queueItem['queue_status'] ?? 'pending'));
+                                    $queueBadge = $queueStatus === 'pending'
+                                        ? ['text' => 'Pending', 'bg' => 'rgba(245, 158, 11, 0.18)', 'color' => '#92400e']
+                                        : ($queueStatus === 'shipped'
+                                            ? ['text' => 'Shipped', 'bg' => 'rgba(59, 130, 246, 0.18)', 'color' => '#1d4ed8']
+                                            : ($queueStatus === 'delivered'
+                                                ? ['text' => 'Delivered', 'bg' => 'rgba(16, 185, 129, 0.2)', 'color' => '#047857']
+                                                : ['text' => ucfirst($queueStatus), 'bg' => 'rgba(148, 163, 184, 0.18)', 'color' => '#475569']
+                                            )
+                                        );
+                                ?>
                                 <div class="setting-row">
                                     <div class="d-flex align-items-center gap-3">
                                         <div class="setting-icon"><i class="fas fa-box"></i></div>
                                         <div>
-                                            <div style="font-weight: 600; font-size: 1rem;">Physical Card Ending <?php echo htmlspecialchars((string)$card['card_last4'], ENT_QUOTES, 'UTF-8'); ?></div>
-                                            <div style="font-size: 0.84rem; color: var(--text-secondary);">Requested <?php echo htmlspecialchars((string)$card['requested_at'], ENT_QUOTES, 'UTF-8'); ?> · Pending review</div>
+                                            <div style="font-weight: 600; font-size: 1rem;">Physical Card Ending <?php echo htmlspecialchars((string)($queueItem['card_last4'] ?? '----'), ENT_QUOTES, 'UTF-8'); ?></div>
+                                            <div style="font-size: 0.84rem; color: var(--text-secondary);">Queued <?php echo htmlspecialchars((string)($queueItem['queued_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · <?php echo htmlspecialchars((string)($queueItem['notes'] ?? 'In delivery queue'), ENT_QUOTES, 'UTF-8'); ?></div>
                                         </div>
                                     </div>
-                                    <span class="cards-chip" style="background:rgba(245, 158, 11, 0.18); color:#92400e;">Pending</span>
+                                    <span class="cards-chip" style="background:<?php echo $queueBadge['bg']; ?>; color:<?php echo $queueBadge['color']; ?>;"><?php echo htmlspecialchars($queueBadge['text'], ENT_QUOTES, 'UTF-8'); ?></span>
                                 </div>
                             <?php endforeach; ?>
                         <?php endif; ?>
